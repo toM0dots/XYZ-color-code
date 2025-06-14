@@ -49,13 +49,12 @@ def compute_dE(lattice, i, j):
 def monte_carlo_error(lattice, num_steps, error_rate):
     H = lattice.shape[0]
     L = lattice.shape[1]
-    for _ in range(num_steps):
-        i = random.randint(0, H - 1)
-        j = random.randint(0, L - 1)
-        r = random.random()
-        if r < error_rate:
-            # Flip the qubit
-            lattice[i, j] = (lattice[i, j] + 1) % 2
+    for i in range(H):
+        for j in range(L):
+            r = random.random()
+            if r < error_rate:
+                # Flip the qubit
+                lattice[i, j] = (lattice[i, j] + 1) % 2
             """
         for i in range(H):
             for j in range(L):
@@ -348,7 +347,7 @@ def logical_operators(lattice):
     logicals = [Lattice, lattice1, lattice2, lattice3]      # 1. L + M 2. M  3. L 4.vaccum
     return logicals
 
-def logical_checks(lattice):
+def logical_checks(lattice, x):
     """
     Optimal decoder using sweeper.
     """
@@ -367,7 +366,7 @@ def logical_checks(lattice):
     weights = [( (R_i + C1 + C2) % 2 ).sum() for R_i in R]
     min_weight = min(weights)
     min_index = weights.index(min_weight)
-    check = ((R[min_index] + C1 + C2 + lattice) % 2 ).sum()
+    check = ((R[min_index] + C1 + C2 + lattice + R[x]) % 2 ).sum()
     # print(weights)
     # print(check)
     if check == 0:
@@ -451,31 +450,51 @@ def solve_mod2(A, y):
 import multiprocessing as mp
 
 def run_until_truncation(seed: int,
+                         logical: int,
+                         error_rate: float,
+                         out_list: list):
+    random.seed(seed)
+    beta = math.log((3 + error_rate) / error_rate) / 3
+    time_list = []
+    x = lattice_space(12, 9)
+    logicals = logical_operators(x)
+    lattice = logicals[logical].copy()
+    step = 0
+    while True:
+        step += 1
+        lattice = bkl(lattice, 1, [], error_rate, time_list)
+        # lattice = monte_carlo_error(lattice, 1 , error_rate)
+        if step % 10 == 0 and not logical_checks(lattice, logical):
+            break
+    mem_time = sum(time_list)
+    out_list.append(mem_time)
+
+def run_until_truncation_test(seed: int,
+                              logical: int,
                          error_rate: float,
                          out_list: list):
     random.seed(seed)
     beta = math.log((3 + error_rate) / error_rate) / 3
     x = lattice_space(9, 6)
     logicals = logical_operators(x)
-    lattice = logicals[3].copy()
-    step = 0
-    while True:
-        step += 1
-        lattice = bkl(lattice, 1, [], error_rate, [])
-        if step % 5 == 0 and not logical_checks(lattice):
-            break
-    out_list.append(step)
-
+    lattice = logicals[logical].copy()
+    # lattice = bkl(lattice, 1, [], error_rate, [])
+    lattice = monte_carlo_error(lattice, 1 , error_rate)
+    flag = logical_checks(lattice, logical)
+    out_list.append(flag)
+    
 def main():
-    error_rate = 1e-4
-    seeds = list(range(200, 400))
+    error_rate = 0.0001
+    seeds = list(range(400))
+    logical = 1
+    # seeds = [123, 46, ]
     manager = mp.Manager()
     stop_steps = manager.list()
 
     processes = []
     for s in seeds:
         p = mp.Process(target=run_until_truncation,
-                       args=(s, error_rate, stop_steps))
+                       args=(s, logical, error_rate, stop_steps))
         p.start()
         processes.append(p)
 
@@ -485,10 +504,14 @@ def main():
     stop_steps = list(stop_steps)
     if not stop_steps:
         raise RuntimeError("No results collected—check your worker function!")
-    avg_stop = sum(stop_steps[100:]) / (len(stop_steps) -100)
-
+    avg_stop = sum(stop_steps) / (len(stop_steps))
+    max_stop = max(stop_steps)
+    # errors = stop_steps.count(False)/len(stop_steps)
+    # print("Logical Error for each seed:", stop_steps)
+    # print("logical error rate:", errors)
     print("Stopping steps for each seed:", stop_steps)
     print(f"Average stopping step: {avg_stop:.2f}")
+    print("Max Stop:", max_stop)
 
 if __name__ == "__main__":
     mp.set_start_method('fork', force=True)
