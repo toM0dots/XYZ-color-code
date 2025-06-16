@@ -456,7 +456,7 @@ def run_until_truncation(seed: int,
     random.seed(seed)
     beta = math.log((3 + error_rate) / error_rate) / 3
     time_list = []
-    x = lattice_space(12, 9)
+    x = lattice_space(9, 6)
     logicals = logical_operators(x)
     lattice = logicals[logical].copy()
     step = 0
@@ -464,10 +464,11 @@ def run_until_truncation(seed: int,
         step += 1
         lattice = bkl(lattice, 1, [], error_rate, time_list)
         # lattice = monte_carlo_error(lattice, 1 , error_rate)
-        if step % 10 == 0 and not logical_checks(lattice, logical):
-            break
+        if step % 10 == 0 :
+            if not logical_checks(lattice, logical):
+                break
     mem_time = sum(time_list)
-    out_list.append(mem_time)
+    out_list.append((mem_time, step))
 
 def run_until_truncation_test(seed: int,
                               logical: int,
@@ -475,7 +476,7 @@ def run_until_truncation_test(seed: int,
                          out_list: list):
     random.seed(seed)
     beta = math.log((3 + error_rate) / error_rate) / 3
-    x = lattice_space(9, 6)
+    x = lattice_space(12, 9)
     logicals = logical_operators(x)
     lattice = logicals[logical].copy()
     # lattice = bkl(lattice, 1, [], error_rate, [])
@@ -485,8 +486,8 @@ def run_until_truncation_test(seed: int,
     
 def main():
     error_rate = 0.0001
-    seeds = list(range(400))
-    logical = 1
+    seeds = list(range(100))
+    logical = 2
     # seeds = [123, 46, ]
     manager = mp.Manager()
     stop_steps = manager.list()
@@ -500,12 +501,19 @@ def main():
 
     for p in processes:
         p.join()
-
-    stop_steps = list(stop_steps)
+    t_mem, steps = zip(*stop_steps)
+    t_mem = list(t_mem)
+    steps = list(steps)
+    
     if not stop_steps:
         raise RuntimeError("No results collected—check your worker function!")
-    avg_stop = sum(stop_steps) / (len(stop_steps))
-    max_stop = max(stop_steps)
+    avg_stop = sum(steps) / (len(steps))
+    max_stop = max(steps)
+    avg_time = sum(t_mem) / len(t_mem)
+    max_time = max(t_mem)
+    print(f"Average time: {avg_time:.2f}")
+    print(f"Max time: {max_time:.2f}")
+
     # errors = stop_steps.count(False)/len(stop_steps)
     # print("Logical Error for each seed:", stop_steps)
     # print("logical error rate:", errors)
