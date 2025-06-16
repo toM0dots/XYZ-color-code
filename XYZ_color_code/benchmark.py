@@ -462,8 +462,9 @@ def run_until_truncation(seed: int,
     step = 0
     while True:
         step += 1
-        lattice = bkl(lattice, 1, [], error_rate, time_list)
-        # lattice = monte_carlo_error(lattice, 1 , error_rate)
+        # lattice = bkl(lattice, 1, [], error_rate, time_list)
+        
+        lattice = monte_carlo_error(lattice, 1 , error_rate)
         if step % 10 == 0 and not logical_checks(lattice, logical):
             break
     mem_time = sum(time_list)
