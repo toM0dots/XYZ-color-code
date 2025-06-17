@@ -101,7 +101,8 @@ def bkl(lattice, steps, energy_hist, error_rate, time_list):
         rates = {}
         total_rate = 0.0
         for dE in sorted(classes):
-            rate = len(classes[dE])* (dE / (np.exp(beta * dE)-1 ) )#- error_rate)
+            # rate = len(classes[dE])* (dE / (np.exp(beta * dE)-1 ) )#- error_rate)
+            rate = len(classes[dE])*  error_rate
             rates[dE] = rate
             total_rate += rate
         if total_rate == 0:
@@ -456,18 +457,21 @@ def run_until_truncation(seed: int,
     random.seed(seed)
     beta = math.log((3 + error_rate) / error_rate) / 3
     time_list = []
+    energy_list = []
     x = lattice_space(9, 6)
     logicals = logical_operators(x)
     lattice = logicals[logical].copy()
     step = 0
     while True:
         step += 1
-        lattice = bkl(lattice, 1, [], error_rate, time_list)
+        lattice = bkl(lattice, 1, energy_list, error_rate, time_list)
         # lattice = monte_carlo_error(lattice, 1 , error_rate)
-        if step % 10 == 0 and not logical_checks(lattice, logical):
+        # if step % 10 == 0 and not logical_checks(lattice, logical):
+        #     break
+        if not logical_checks(lattice, logical):
             break
     mem_time = sum(time_list)
-    out_list.append((mem_time, step))
+    out_list.append((mem_time, step, energy_list[-1]))
 
 def run_until_truncation_test(seed: int,
                               logical: int,
@@ -484,8 +488,8 @@ def run_until_truncation_test(seed: int,
     out_list.append(flag)
     
 def main():
-    error_rate = 0.0001
-    seeds = list(range(100))
+    error_rate = 0.01
+    seeds = list(range(200))
     logical = 2
     # seeds = [123, 46, ]
     manager = mp.Manager()
