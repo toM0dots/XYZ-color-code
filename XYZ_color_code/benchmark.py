@@ -2,6 +2,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 import math
 import random
+import multiprocessing as mp
+import csv
+import json
+import argparse
 # initialize the codespace with only A-stabilizer 
 
 def lattice_space(H, L):
@@ -101,8 +105,7 @@ def bkl(lattice, steps, energy_hist, error_rate, time_list):
         rates = {}
         total_rate = 0.0
         for dE in sorted(classes):
-            # rate = len(classes[dE])* (dE / (np.exp(beta * dE)-1 ) )#- error_rate)
-            rate = len(classes[dE])*  error_rate
+            rate = len(classes[dE])* (dE / (np.exp(beta * dE)-1 ) )#- error_rate)
             rates[dE] = rate
             total_rate += rate
         if total_rate == 0:
@@ -384,13 +387,12 @@ def logical_checks(lattice, x):
 def solve_mod2(A, y):
     """
     Solve y = A x over GF(2).  Returns (x_particular, nullspace_basis).
-    If no solution exists, raises ValueError.
     """
     A = np.array(A, dtype=np.uint8) & 1
     y = np.array(y, dtype=np.uint8).flatten() & 1
     r, c = A.shape
 
-    # Build augmented matrix [A | y]
+    # Build [A | y]
     aug = np.concatenate([A.copy(), y.reshape(-1,1)], axis=1)
 
     pivot_cols = []
@@ -453,25 +455,30 @@ import multiprocessing as mp
 def run_until_truncation(seed: int,
                          logical: int,
                          error_rate: float,
-                         out_list: list):
+                         H: int,
+                         L: int) -> tuple[float, list[float], list[float]]:
     random.seed(seed)
     beta = math.log((3 + error_rate) / error_rate) / 3
     time_list = []
     energy_list = []
-    x = lattice_space(9, 6)
+    mag_list =[]
+    x = lattice_space(H, L)
     logicals = logical_operators(x)
     lattice = logicals[logical].copy()
     step = 0
     while True:
         step += 1
         lattice = bkl(lattice, 1, energy_list, error_rate, time_list)
+        mag_list.append(lattice.sum())
         # lattice = monte_carlo_error(lattice, 1 , error_rate)
-        # if step % 10 == 0 and not logical_checks(lattice, logical):
-        #     break
-        if not logical_checks(lattice, logical):
+        if step % 10 == 0 and not logical_checks(lattice, logical):
             break
     mem_time = sum(time_list)
-    out_list.append((mem_time, step, energy_list[-1]))
+    return mem_time, energy_list,  mag_list
+#    mem_times.append(list(mem_time))
+#    energies.append(list(energy_list))
+#    mags.append(list(mag_list))
+    
 
 def run_until_truncation_test(seed: int,
                               logical: int,
@@ -479,7 +486,7 @@ def run_until_truncation_test(seed: int,
                          out_list: list):
     random.seed(seed)
     beta = math.log((3 + error_rate) / error_rate) / 3
-    x = lattice_space(12, 9)
+    x = lattice_space(9, 6)
     logicals = logical_operators(x)
     lattice = logicals[logical].copy()
     # lattice = bkl(lattice, 1, [], error_rate, [])
@@ -488,42 +495,74 @@ def run_until_truncation_test(seed: int,
     out_list.append(flag)
     
 def main():
-    error_rate = 0.01
-    seeds = list(range(200))
-    logical = 2
-    # seeds = [123, 46, ]
-    manager = mp.Manager()
-    stop_steps = manager.list()
+    parser = argparse.ArgumentParser(description='Run memory time simulation.')
 
-    processes = []
-    for s in seeds:
-        p = mp.Process(target=run_until_truncation,
-                       args=(s, logical, error_rate, stop_steps))
-        p.start()
-        processes.append(p)
-
-    for p in processes:
-        p.join()
-    t_mem, steps = zip(*stop_steps)
-    t_mem = list(t_mem)
-    steps = list(steps)
+    parser.add_argument('--seeds', type=int, nargs='+', default= list(range(100)),
+                        help='Random seed for reproducibility.')
     
-    if not stop_steps:
-        raise RuntimeError("No results collected—check your worker function!")
-    avg_stop = sum(steps) / (len(steps))
-    max_stop = max(steps)
-    avg_time = sum(t_mem) / len(t_mem)
-    max_time = max(t_mem)
-    print(f"Average time: {avg_time:.2f}")
-    print(f"Max time: {max_time:.2f}")
+    parser.add_argument('--logical', type=int, default=3,
+                        help='Index of logical operator to test (default: 3, all up).')
+    
+    parser.add_argument('--error_rate', type=float, default=  0.0001,
+                        help='Physical Error rate for the BKL update.')
 
+    parser.add_argument('--H', type=int, default=12,
+                        help='Lattice Height.')
+
+    parser.add_argument('--L', type=float, default=9,
+                        help='Lattice Length.')
+                        
+    args = parser.parse_args()
+    seeds = args.seeds
+    logical = args.logical
+    error_rate = args.error_rate
+    H = args.H
+    L = args.L
+    
+
+
+    work_args = [
+        (s, logical, error_rate, H, L)
+        for s in seeds
+    ]
+
+    # run in parallel
+    with mp.Pool(mp.cpu_count()) as pool:
+        results = pool.starmap(run_until_truncation, work_args)
+        # each result is (mem_time: float, energies: list[float], mags: list[float])
+
+    # unzip the results
+    mem_times, energies, mags = map(list, zip(*results))
+
+    # write CSV with JSON-encoded lists
+    with open('results.csv', 'w', newline='') as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow(['seed', 'mem_time', 'energies', 'mags'])
+        for seed, mt, en, mg in zip(args.seeds, mem_times, energies, mags):
+            writer.writerow([
+                seed,
+                f"{mt:.6f}",
+                json.dumps(en),
+                json.dumps(mg),
+            ])
+
+    print(f"Wrote results.csv with {len(args.seeds)} rows.")
+
+    mem_times = list(mem_times)
+    
+    if not mem_times:
+        raise RuntimeError("No results collected—check your worker function!")
+    avg_mem_times = sum( mem_times) / (len( mem_times))
+    max_mem_times = max( mem_times)
     # errors = stop_steps.count(False)/len(stop_steps)
     # print("Logical Error for each seed:", stop_steps)
     # print("logical error rate:", errors)
-    print("Stopping steps for each seed:", stop_steps)
-    print(f"Average stopping step: {avg_stop:.2f}")
-    print("Max Stop:", max_stop)
+    print("Memory time for each seed:",  mem_times)
+    print(f'Average stopping step: { avg_mem_times:.2f}')
+    print("Max Stop:", max_mem_times)
 
-if __name__ == "__main__":
-    mp.set_start_method('fork', force=True)
+
+
+    
+if __name__ == '__main__':
     main()
