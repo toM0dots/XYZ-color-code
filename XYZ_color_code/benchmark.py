@@ -509,7 +509,7 @@ def main():
     parser.add_argument('--H', type=int, default=12,
                         help='Lattice Height.')
 
-    parser.add_argument('--L', type=float, default=9,
+    parser.add_argument('--L', type=int, default=9,
                         help='Lattice Length.')
                         
     args = parser.parse_args()
