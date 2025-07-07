@@ -1,0 +1,4 @@
+Traceback (most recent call last):
+  File "/users/0/tang1014/XYZ-color-code/XYZ_color_code/benchmark.py", line 1, in <module>
+    import numpy as np
+ModuleNotFoundError: No module named 'numpy'
