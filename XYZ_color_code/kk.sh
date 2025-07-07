@@ -13,7 +13,7 @@
 #load and activate local python environment
 module load conda
 source activate decoder_env
-cd ~/XYZ_color_code
+# cd ~/XYZ_color_code
 
 WORKDIR=slurm_out/${SLURM_ARRAY_JOB_ID}-${SLURM_ARRAY_TASK_ID}
 

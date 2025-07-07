@@ -1,0 +1,5 @@
+/var/spool/slurmd/job37674468/slurm_script: line 16: cd: /users/0/tang1014/XYZ_color_code: No such file or directory
+/var/spool/slurmd/job37674468/slurm_script: line 32: 0: command not found
+/var/spool/slurmd/job37674468/slurm_script: line 34: 12: command not found
+/var/spool/slurmd/job37674468/slurm_script: line 35: 9: command not found
+python3: can't open file '/users/0/tang1014/XYZ-color-code/benchmark.py': [Errno 2] No such file or directory
