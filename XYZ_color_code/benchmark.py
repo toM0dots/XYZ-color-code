@@ -76,12 +76,13 @@ def nonzero_random():
         r = random.random()
     return r
 
-def bkl(lattice, steps, energy_hist, error_rate, time_list):
+def bkl(lattice, steps, error_rate, energy_hist=[], time_list=[], spin_list=[], mag_list = [], nw = [], sw= [], correction = True):
     f = 1e-8
     beta = math.log((3+error_rate)/error_rate)/3
     H = lattice.shape[0]
     L = lattice.shape[1]
-    for step in range(steps):
+    # mag_list =[]
+    for _ in range(steps):
         # for i_ in range(H):
         #     for j_ in range(L):
         #         r = random.random()
@@ -98,19 +99,27 @@ def bkl(lattice, steps, energy_hist, error_rate, time_list):
                 if dE not in classes:
                     classes[dE] = []
                 classes[dE].append((i, j))
-        # print(classes)
+        row = np.array([len(classes.get(-3, [])), len(classes.get(-1, [])), len(classes.get( 1, [])), len(classes.get( 3, []))])
+        # for dE in (-3, -1, 1, 3):
+        #     classes.setdefault(dE, [])
+        nw.append(row)
         # Calculate transition rates for each class:
         # For spins where flipping lowers energy (dE <= 0), acceptance probability is 1;
         # for dE > 0, it is dE*(1-exp(-beta * dE))
         rates = {}
         total_rate = 0.0
         for dE in sorted(classes):
-            rate = len(classes[dE])* (dE / (np.exp(beta * dE)-1 ) )#- error_rate)
+            if correction == True:
+                rate = len(classes[dE])* (dE / (np.exp(beta * dE)-1 ) )#- error_rate)
+            else:
+                rate = error_rate
             rates[dE] = rate
             total_rate += rate
         if total_rate == 0:
             print(len(classes), "total_rate is 0")
             continue
+        rate_row = np.array([rates.get(-3, 0.0), rates.get(-1, 0.0), rates.get(1, 0.0), rates.get(3, 0.0)])
+        sw.append(rate_row)
         # rate_list = []
         # rate_list.append(total_rate)
         # Choose a class according to the rates (weighted selection)
@@ -125,18 +134,23 @@ def bkl(lattice, steps, energy_hist, error_rate, time_list):
                 break
         if total_rate == 0.0:
             raise ValueError("Total rate is zero, cannot choose a class.")
-            
+        spin_list.append(chosen_class)   
+        
         # From the chosen class, select a spin uniformly at random
         i, j = random.choice(classes[chosen_class])
         # Flip the spin
         lattice[i, j] = (lattice[i, j] + 1) % 2
         energy_hist.append(energy(lattice))   
         rho3 = nonzero_random()
-        step = -1/total_rate * np.log(rho3)
+        dT = -1/total_rate * np.log(rho3)
         # print(rho3, total_rate)
         
-        time_list.append(step)
+        time_list.append(dT)
+        mag_list.append(np.sum(lattice))
     return lattice
+
+
+
 # optimal decoder
 import numpy as np
 
@@ -494,7 +508,116 @@ def run_until_truncation_test(seed: int,
     flag = logical_checks(lattice, logical)
     out_list.append(flag)
     
+
+
+def run_until_truncation_mag(seeds: int,
+                         steps: int,
+                         logical: int,
+                         error_rate: float,
+                         H: int,
+                         L: int):
+    
+    E = H * L
+
+    num_runs  = seeds
+    num_steps = steps
+
+    # ------------------------------------------
+    # 1) Collect all decoder (bkl) trajectories
+    # ------------------------------------------
+    decoder_trajs = np.zeros((num_runs, num_steps))
+    decoder_times = np.zeros((num_runs, num_steps))  # if bkl populates it; otherwise you can drop it
+    decoder_mag = np.zeros((num_runs, num_steps))
+    mem_times = []
+    for run_idx, seed in enumerate(range(num_runs)):
+        random.seed(seed)
+        x = lattice_space(H, L)
+        logicals = logical_operators(x)
+        lattice = logicals[logical].copy()
+        
+
+        energy_list = []
+        time_list   = []            # if bkl populates it; otherwise you can drop it
+        mags = []
+        for i in range(num_steps):
+            lattice = bkl(lattice, 1, error_rate, energy_list,  time_list, mag_list=mags)
+            if i % 20 == 0 and not logical_checks(lattice, logical):
+                mem_times.append(np.sum(time_list))
+                
+
+        if len(energy_list) != num_steps:
+            raise ValueError(f"Run {run_idx}: expected {num_steps} energies, got {len(energy_list)}")
+
+        decoder_trajs[run_idx, :] = energy_list
+        decoder_times[run_idx, :] = time_list  # if bkl populates it; otherwise you can drop it
+        decoder_mag[run_idx, :] = mags  # Store the magnetization trajectory
+    # compute average (and normalize)
+    mean_energy = decoder_trajs.mean(axis=0) / E
+    std_decoder = decoder_trajs.std(axis=0) / E
+    mean_times = decoder_times.mean(axis=0)  # if bkl populates it; otherwise you can drop it   
+    mean_times_cum = np.cumsum(mean_times)
+    mean_mag = decoder_mag.mean(axis=0) /E  # Store the average magnetization trajectory
+    mean_mem = np.mean(mem_times)
+
+    # x = np.arange(5000)
+    plt.figure(figsize=(10, 3))
+    plt.plot(mean_times_cum, mean_energy, color ='blue', label='energy')
+    plt.plot(mean_times_cum, mean_mag, color ='green', label='magnitization')
+    plt.axvline(x=mean_mem, color='red', linestyle='--', linewidth=2)
+    # plt.plot(x, bar_list, color ='red',  label='2000 step errors without decoding')
+    plt.xlabel('physical times')
+    plt.ylabel('Energy')
+    plt.title(f'Energy vs Steps on Lattice {H}x{L}')
+    plt.legend()
+    plt.grid()
+    plt.show()
+    plt.savefig('energy_vs_steps.png')
+
+    plt.figure(figsize=(10, 3))
+    plt.plot(mean_times_cum, mean_mag, color ='blue', label='magnitization')
+    plt.axvline(x=mean_mem, color='red', linestyle='--', linewidth=2)
+    # plt.plot(x, bar_list, color ='red',  label='2000 step errors without decoding')
+    plt.xlabel('physical times')
+    plt.ylabel('Magnetization')
+    plt.title(f'Magnetization vs Steps on Lattice {H}x{L}')
+    plt.legend()
+    plt.grid()
+    plt.show()
+    plt.savefig('mag_vs_steps.png')
+
 def main():
+    parser = argparse.ArgumentParser(description='Run memory time simulation.')
+
+    # parser.add_argument('--seeds', type=int, nargs='+', default= list(range(100)),
+    #                     help='Random seed for reproducibility.')
+    
+    parser.add_argument('--seeds', type=int, nargs='+', default= 100,
+                        help='Random seed for reproducibility.')
+    parser.add_argument('--logical', type=int, default=3,
+                        help='Index of logical operator to test (default: 3, all up).')
+    
+    parser.add_argument('--error_rate', type=float, default=  0.0001,
+                        help='Physical Error rate for the BKL update.')
+
+    parser.add_argument('--H', type=int, default=12,
+                        help='Lattice Height.')
+
+    parser.add_argument('--L', type=int, default=9,
+                        help='Lattice Length.')
+    parser.add_argument('--steps', type=int, default=1000,
+                        help='simulation steps.')
+                        
+    args = parser.parse_args()
+    seeds = args.seeds
+    logical = args.logical
+    error_rate = args.error_rate
+    H = args.H
+    L = args.L
+    steps = args.steps
+    run_until_truncation_mag(seeds, steps, logical, error_rate, H, L)
+
+# def main():
+def main_main():
     parser = argparse.ArgumentParser(description='Run memory time simulation.')
 
     parser.add_argument('--seeds', type=int, nargs='+', default= list(range(100)),
