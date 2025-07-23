@@ -542,7 +542,7 @@ def run_until_truncation_mag(seeds: int,
         for i in range(num_steps):
             lattice = bkl(lattice, 1, error_rate, energy_list,  time_list, mag_list=mags)
             if i % 20 == 0 and not logical_checks(lattice, logical):
-                mem_times.append(np.sum(time_list))
+                mem_times.append(np.sum( time_list))
                 
 
         if len(energy_list) != num_steps:
@@ -554,10 +554,11 @@ def run_until_truncation_mag(seeds: int,
     # compute average (and normalize)
     mean_energy = decoder_trajs.mean(axis=0) / E
     std_decoder = decoder_trajs.std(axis=0) / E
-    mean_times = decoder_times.mean(axis=0)  # if bkl populates it; otherwise you can drop it   
-    mean_times_cum = np.cumsum(mean_times)
+    mean_times = decoder_times.mean(axis=0)  # dT list  
+    mean_times_cum = np.cumsum(mean_times)  # Cumulative sum of time steps
     mean_mag = decoder_mag.mean(axis=0) /E  # Store the average magnetization trajectory
     mean_mem = np.mean(mem_times)
+    # mean_step = np.mean(mem_times[:,0])
 
     # x = np.arange(5000)
     plt.figure(figsize=(10, 3))
@@ -567,25 +568,25 @@ def run_until_truncation_mag(seeds: int,
     # plt.plot(x, bar_list, color ='red',  label='2000 step errors without decoding')
     plt.xlabel('physical times')
     plt.ylabel('Energy')
-    plt.title(f'Energy vs Steps on Lattice {H}x{L}')
+    plt.title(f'Energy vs Steps on Lattice {H}x{L} error {error_rate}')
     plt.legend()
     plt.grid()
-    plt.savefig(f'E(t)/M(t)_lattice{H}*{L}_error_{error_rate}.png')
+    plt.savefig(f'E(t)..M(t)_lattice{H}*{L}_error_{error_rate}.png')
     plt.show()
     
 
-    plt.figure(figsize=(10, 3))
-    plt.plot(mean_times, mean_energy, color ='blue', label='energy')
-    plt.plot(mean_times, mean_mag, color ='green', label='magnitization')
-    plt.axvline(x=mean_mem, color='red', linestyle='--', linewidth=2, label= f'{mean_mem}')
-    # plt.plot(x, bar_list, color ='red',  label='2000 step errors without decoding')
-    plt.xlabel('MC steps')
-    plt.ylabel('Energy')
-    plt.title(f'Energy vs Steps on Lattice {H}x{L}')
-    plt.legend()
-    plt.grid()
-    plt.savefig(f'E(t)/M(t)_lattice{H}*{L}_error_{error_rate}.png')
-    plt.show()
+    # plt.figure(figsize=(10, 3))
+    # plt.plot(np.arange(len(mean_times)), mean_energy, color ='blue', label='energy')
+    # plt.plot(np.arange(len(mean_times)), mean_mag, color ='green', label='magnitization')
+    # plt.axvline(x=mean_step, color='red', linestyle='--', linewidth=2, label= f'{mean_mem}')
+    # # plt.plot(x, bar_list, color ='red',  label='2000 step errors without decoding')
+    # plt.xlabel('MC steps')
+    # plt.ylabel('Energy')
+    # plt.title(f'Energy vs Steps on Lattice {H}x{L} error {error_rate}')
+    # plt.legend()
+    # plt.grid()
+    # plt.savefig(f'E(t)..M(t)_lattice{H}*{L}_error_{error_rate}_MC.png')
+    # plt.show()
     
 
 def main():
@@ -594,7 +595,7 @@ def main():
     # parser.add_argument('--seeds', type=int, nargs='+', default= list(range(100)),
     #                     help='Random seed for reproducibility.')
     
-    parser.add_argument('--seeds', type=int, nargs='+', default= 100,
+    parser.add_argument('--seeds', type=int,  default= 100,
                         help='Random seed for reproducibility.')
     parser.add_argument('--logical', type=int, default=3,
                         help='Index of logical operator to test (default: 3, all up).')
