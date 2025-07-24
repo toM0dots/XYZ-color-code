@@ -571,7 +571,7 @@ def run_until_truncation_mag(seeds: int,
     plt.title(f'Energy vs Steps on Lattice {H}x{L} error {error_rate}')
     plt.legend()
     plt.grid()
-    plt.savefig(f'E(t)..M(t)_lattice{H}*{L}_error_{error_rate}.png')
+    plt.savefig(f'./results/E(t)..M(t)_lattice{H}*{L}_error_{error_rate}.png')
     plt.show()
     
 
