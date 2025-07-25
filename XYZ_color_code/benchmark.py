@@ -561,7 +561,7 @@ def run_until_truncation_mag(seeds: int,
     # mean_step = np.mean(mem_times[:,0])
 
     # x = np.arange(5000)
-    plt.figure(figsize=(10, 3))
+    plt.figure(figsize=(10, 4))
     plt.plot(mean_times_cum, mean_energy, color ='blue', label='energy')
     plt.plot(mean_times_cum, mean_mag, color ='green', label='magnitization')
     plt.axvline(x=mean_mem, color='red', linestyle='--', linewidth=2, label= f'{mean_mem}')
