@@ -71,12 +71,12 @@ def monte_carlo_error(lattice, num_steps, error_rate):
     return lattice
     
 def nonzero_random():
-    r = random.random()
+    r = 1.0 - random.random()
     while r == 0.0:
-        r = random.random()
+        r = 1.0- random.random()
     return r
 
-def bkl(lattice, steps, error_rate, energy_hist=[], time_list=[], spin_list=[], mag_list = [], nw = [], sw= [], correction = True):
+def bkl(lattice, steps, error_rate, energy_hist=[], time_list=[0], spin_list=[], mag_list = [], nw = [], sw= [], correction = True):
     f = 1e-8
     beta = math.log((3+error_rate)/error_rate)/3
     H = lattice.shape[0]
@@ -381,10 +381,11 @@ def logical_checks(lattice, x):
     E = optimal_decoder(syndrome)
     C2 = C2_constructor(E, latt)
     # print("C2", C2)
-    weights = [( (R_i + C1 + C2) % 2 ).sum() for R_i in R]
+    weights = [( (R_i + C1 + C2 ) % 2 ).sum() for R_i in R]
     min_weight = min(weights)
-    min_index = weights.index(min_weight)
-    check = ((R[min_index] + C1 + C2 + lattice + R[x]) % 2 ).sum()
+    min_indices = [i for i, v in enumerate(weights) if v == min_weight]
+    random_index = random.choice(min_indices)
+    check = ((R[random_index] + C1 + C2 + lattice + R[x]) % 2 ).sum()
     # print(weights)
     # print(check)
     if check == 0:
@@ -463,6 +464,54 @@ def solve_mod2(A, y):
 
     return x_part, nullspace_basis
 
+def correlation(spin_config: list, tau:int =4):
+    spin_conf = np.array(spin_config.copy())
+    spin_conf = 1 - 2 * spin_conf  # Convert to -1, 1
+    T, H, L = spin_conf.shape
+    N = H * L
+    S_T = np.mean(spin_conf)
+    # S_T = 1/2
+    correlation = []
+    correlation = []
+    for t in range(T - tau):
+        # For each tau, compute the correlation between t0 and t0+tau
+        s0 = spin_conf[t]        # shape (H, L)
+        st = spin_conf[tau]  # shape (H, L)
+        # Correlator: <S(t0) S(t0+tau)> - <S>^2, averaged over sites
+        # corr = np.mean(s0 * st) - S_T ** 2
+        corr = np.mean((s0 * st)) - np.mean(s0) * np.mean(st) 
+        correlation.append(corr)
+    return T- tau, correlation
+
+
+def time_bin(time_lists:list):
+    """
+    Bins the time lists into intervals of size bin_size.
+    Returns a list of binned times and their corresponding counts.
+    """
+    # flatten cumsum lists in one and divide by equllength bins
+    flattened = np.array(time_lists).ravel()
+    order = np.argsort(np.abs(flattened))
+    flat_sorted_by_mag = flattened[order]
+    nbins = np.array(time_lists).shape[1]
+    edges = np.linspace(flat_sorted_by_mag.min(), flat_sorted_by_mag.max(), nbins+1)
+    centers = 0.5 * (edges[:-1] + edges[1:])
+
+    # create bins 
+    bin_idx = np.digitize(flat_sorted_by_mag, edges) - 1
+    bin_idx = np.clip(bin_idx, 0, nbins-1)
+
+    sums   = np.bincount(bin_idx, weights=flat_sorted_by_mag, minlength=nbins)
+    counts = np.bincount(bin_idx,           minlength=nbins)
+
+    means = np.empty_like(centers)
+    # normal division where counts>0
+    np.divide(sums, counts, out=means, where=(counts>0))
+    # fill empty bins with the bin center
+    empty = (counts == 0)
+    means[empty] = centers[empty]
+    return means
+
 
 import multiprocessing as mp
 
@@ -480,13 +529,34 @@ def run_until_truncation(seed: int,
     logicals = logical_operators(x)
     lattice = logicals[logical].copy()
     step = 0
-    while True:
+    tt = {9:  91599.08858273,  
+          12: 278749.52807721,
+          15: 481821.1667528,
+          18:   686943.27286395,
+          24: 1171231.40684312,
+          27: 1234491.48927047,
+          30: 1098058.82823757,
+          33: 796866.28682478,
+          39: 769532.54229311,
+          48:  566622.97092831,
+          51:  456105.62961858,
+          57: 407959.47402282,
+          99: 275285.79732844,
+          195:  254027.27736396}
+    
+    decoder_step = 1
+    truncated = False
+    while not truncated:
         step += 1
-        lattice = bkl(lattice, 1, energy_list, error_rate, time_list)
+        lattice = bkl(lattice, 1, error_rate,  energy_list,  time_list)
         mag_list.append(lattice.sum())
         # lattice = monte_carlo_error(lattice, 1 , error_rate)
-        if step % 10 == 0 and not logical_checks(lattice, logical):
-            break
+        # if step % 10 == 0 and not logical_checks(lattice, logical):
+        #     break
+        if sum(time_list) > tt[H] * decoder_step / 1000:
+            truncated = not logical_checks(lattice, logical)
+            decoder_step += 1
+            # print(f"Truncated at step {step} with total time {sum(time_list)} ms")
     mem_time = sum(time_list)
     return mem_time, energy_list,  mag_list
 #    mem_times.append(list(mem_time))
@@ -541,7 +611,7 @@ def run_until_truncation_mag(seeds: int,
         mags = []
         for i in range(num_steps):
             lattice = bkl(lattice, 1, error_rate, energy_list,  time_list, mag_list=mags)
-            if i % 20 == 0 and not logical_checks(lattice, logical):
+            if i % 20 == 0: #and not logical_checks(lattice, logical):
                 mem_times.append(np.sum( time_list))
                 
 
@@ -554,12 +624,21 @@ def run_until_truncation_mag(seeds: int,
     # compute average (and normalize)
     mean_energy = decoder_trajs.mean(axis=0) / E
     std_decoder = decoder_trajs.std(axis=0) / E
-    mean_times = decoder_times.mean(axis=0)  # dT list  
-    mean_times_cum = np.cumsum(mean_times)  # Cumulative sum of time steps
+    time_lists_full = [np.cumsum(tl) for tl in decoder_times]
+    mean_times_cum = time_bin(time_lists_full)
+    # mean_times = decoder_times.mean(axis=0)  # dT list  
+    # mean_times_cum = np.cumsum(mean_times)  # Cumulative sum of time steps
     mean_mag = decoder_mag.mean(axis=0) /E  # Store the average magnetization trajectory
     mean_mem = np.mean(mem_times)
     # mean_step = np.mean(mem_times[:,0])
-
+    
+    #=========== data save ==============
+    with open('./results/mags.csv', 'w', newline='') as f:
+        writer = csv.writer(f)
+        # optional header
+        writer.writerow(['mean_times_cum','mean_mag','mean_energy'])
+        # write row by row
+        writer.writerows(zip(mean_times_cum, mean_mag, mean_energy))
     # x = np.arange(5000)
     plt.figure(figsize=(10, 4))
     plt.plot(mean_times_cum, mean_energy, color ='blue', label='energy')
@@ -587,9 +666,48 @@ def run_until_truncation_mag(seeds: int,
     # plt.grid()
     # plt.savefig(f'E(t)..M(t)_lattice{H}*{L}_error_{error_rate}_MC.png')
     # plt.show()
+
+
+def run_until_truncation_correlation(seed: int,
+                                     steps: int,
+                         logical: int,
+                         error_rate: float,
+                         H: int,
+                         L: int) -> tuple[list[float], list[float]]:
+    random.seed(seed)
+    beta = math.log((3 + error_rate) / error_rate) / 3
+    time_list = []
+    energy_list = []
+    mag_list =[]
+    x = lattice_space(H, L)
+    logicals = logical_operators(x)
+    lattice = logicals[logical].copy()
+    lattice = monte_carlo_error(lattice, 1 , 0.5)
+    energy_hist = []
+    time_list = []
+    time = 1000
+    random.seed(50)
+    # lattice = monte_carlo_error(lattice, 2, error_rate)
+    truncated = False
+    step = 0
+    error_patterns = []
+    syndromes = []
+    spin_config = []
+    while step <steps:
+        step += 1
+        lattice = bkl(lattice,  1, error_rate, energy_hist, time_list)
+        spin_config.append(lattice.copy())
+        error_patterns.append((lattice.copy()+ logicals[logical].copy()) % 2) 
+
+    _, correlations0 = correlation(spin_config, 1)
+    _, correlations1 = correlation(spin_config, 4)
+    _, correlations2 = correlation(spin_config, 16)
+    _, correlations3 = correlation(spin_config, 56)
     
+    return time_list, correlations0, correlations1, correlations2, correlations3
 
 def main():
+# def main_mag():
     parser = argparse.ArgumentParser(description='Run memory time simulation.')
 
     # parser.add_argument('--seeds', type=int, nargs='+', default= list(range(100)),
@@ -619,6 +737,8 @@ def main():
     L = args.L
     steps = args.steps
     run_until_truncation_mag(seeds, steps, logical, error_rate, H, L)
+
+
 
 # def main():
 def main_main():
@@ -681,12 +801,102 @@ def main_main():
         raise RuntimeError("No results collected—check your worker function!")
     avg_mem_times = sum( mem_times) / (len( mem_times))
     max_mem_times = max( mem_times)
+    median_mem_times = np.median(mem_times)
+    std_mem_times = np.std(mem_times)/np.sqrt(len(mem_times))
     # errors = stop_steps.count(False)/len(stop_steps)
     # print("Logical Error for each seed:", stop_steps)
     # print("logical error rate:", errors)
     print("Memory time for each seed:",  mem_times)
     print(f'Average stopping step: { avg_mem_times:.2f}')
+    print("Median Mem Time:", median_mem_times)
+    print("Std Error Mem Time:", std_mem_times)
     print("Max Stop:", max_mem_times)
+
+
+# def main():
+def main_correlation():
+    parser = argparse.ArgumentParser(description='Run memory time simulation.')
+
+    parser.add_argument('--seeds', type=int, nargs='+', default= list(range(100)),
+                        help='Random seed for reproducibility.')
+    
+    parser.add_argument('--logical', type=int, default=3,
+                        help='Index of logical operator to test (default: 3, all up).')
+    
+    parser.add_argument('--steps', type=int, default=13000,
+                        help='steps of bkl')
+    
+    parser.add_argument('--error_rate', type=float, default=  0.0001,
+                        help='Physical Error rate for the BKL update.')
+
+    parser.add_argument('--H', type=int, default=12,
+                        help='Lattice Height.')
+
+    parser.add_argument('--L', type=int, default=9,
+                        help='Lattice Length.')
+                        
+    args = parser.parse_args()
+    seeds = args.seeds
+    logical = args.logical
+    error_rate = args.error_rate
+    steps = args.steps
+    H = args.H
+    L = args.L
+    
+    work_args = [
+        (s, steps, logical, error_rate, H, L)
+        for s in seeds
+    ]
+
+    # run in parallel
+    with mp.Pool(mp.cpu_count()) as pool:
+        results = pool.starmap(run_until_truncation_correlation, work_args)
+        # each result is (mem_time: float, energies: list[float], mags: list[float])
+
+    # unzip the results
+    time_lists, correlations0, correlations1, correlations2, correlations3 = map(list, zip(*results))
+
+    # write CSV with JSON-encoded lists
+    # with open(f'./results/correlations/results{H}*{L}*{error_rate}.csv', 'w', newline='') as csvfile:
+    #     writer = csv.writer(csvfile)
+    #     writer.writerow(['seed', 'time_list', 'correlations_4', 'correlations_16','correlations_56',])
+    #     for seed, mt, c1, c2, c3 in zip(args.seeds, time_lists, correlations1, correlations2, correlations3):
+    #         writer.writerow([
+    #             seed,
+    #             f"{mt:.6f}",
+    #             json.dumps(c1),
+    #             json.dumps(c2),
+    #             json.dumps(c3)
+    #         ])
+
+    # print(f"Wrote results.csv with {len(args.seeds)} rows.")
+
+    time_lists_full = [np.cumsum(time_lists[k]) for k in range(len(seeds))]
+    avg_t = time_bin(time_lists_full)
+    # avg_dt = [ sum(col)/len(col) for col in zip(*time_lists) ]
+    # avg_dt = time_lists[0]  # Assuming all time lists are the same length
+    avg_c0 = [ sum(col)/len(col)  for col in zip(*correlations0) ]
+    avg_c1 = [ sum(col)/len(col)  for col in zip(*correlations1) ]
+    avg_c2 = [ sum(col)/len(col)  for col in zip(*correlations2) ]
+    avg_c3 = [ sum(col)/len(col)  for col in zip(*correlations3) ]
+    
+    time0 = avg_t[1:]/1
+    time1 = avg_t[4:]/4
+    time2 = avg_t[16:]/16
+    time3 = avg_t[56:]/56
+    plt.plot(time0, avg_c0, label='Correlation 1', marker='o', linestyle='-',)
+    plt.plot(time1, avg_c1, label='Correlation 4', marker='o', linestyle='-',)
+    plt.plot(time2, avg_c2, label='Correlation 16',marker='o', linestyle='-',)
+    plt.plot(time3, avg_c3, label='Correlation 56', marker='o', linestyle='-',)
+    plt.xlabel('time')
+    plt.ylabel('Correlation')
+    plt.xscale('log')
+    plt.title('Correlation Function')
+    plt.legend()
+    plt.grid()
+    plt.savefig(f'./results/correlations/correlation_function{H}*{L}.png', dpi=300)
+    plt.show()
+    print(correlations3[0])
 
 
 
