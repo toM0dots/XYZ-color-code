@@ -76,9 +76,12 @@ def nonzero_random():
         r = 1.0- random.random()
     return r
 
-def bkl(lattice, steps, error_rate, energy_hist=[], time_list=[0], spin_list=[], mag_list = [], nw = [], sw= [], correction = True):
+def bkl(lattice, steps, error_rate, energy_hist=[], time_list=[0], spin_list=[], mag_list = [], nw = [], sw= [], correction = True, Beta=None):
     f = 1e-8
-    beta = math.log((3+error_rate)/error_rate)/3
+    if Beta is None:
+        beta = math.log((3+error_rate)/error_rate)/3
+    else:
+        beta = Beta
     H = lattice.shape[0]
     L = lattice.shape[1]
     # mag_list =[]
@@ -484,33 +487,58 @@ def correlation(spin_config: list, tau:int =4):
     return T- tau, correlation
 
 
-def time_bin(time_lists:list):
+def time_bin(time_lists:list, decoder_trajs: list, decoder_mag:list):
     """
     Bins the time lists into intervals of size bin_size.
     Returns a list of binned times and their corresponding counts.
     """
     # flatten cumsum lists in one and divide by equllength bins
-    flattened = np.array(time_lists).ravel()
-    order = np.argsort(np.abs(flattened))
-    flat_sorted_by_mag = flattened[order]
+    flattened_time = np.concatenate(time_lists)
+    flattened_energy = np.concatenate(decoder_trajs)
+    flattened_mag = np.concatenate(decoder_mag)
+
+    order_time = np.argsort(np.abs(flattened_time))
+    flat_sorted_by_mag_time = flattened_time[order_time]
+    flat_sorted_by_mag_energy = flattened_energy[order_time]
+    flat_sorted_by_mag_mag = flattened_mag[order_time]
+
     nbins = np.array(time_lists).shape[1]
-    edges = np.linspace(flat_sorted_by_mag.min(), flat_sorted_by_mag.max(), nbins+1)
-    centers = 0.5 * (edges[:-1] + edges[1:])
+    edges_time = np.linspace(flat_sorted_by_mag_time.min(), flat_sorted_by_mag_time.max(), nbins+1)
+    centers_time = 0.5 * (edges_time[:-1] + edges_time[1:])
+
+    edges_energy = np.linspace(flat_sorted_by_mag_energy.min(), flat_sorted_by_mag_energy.max(), nbins+1)
+    centers_energy = 0.5 * (edges_energy[:-1] + edges_energy[1:])
+    edges_mag = np.linspace(flat_sorted_by_mag_mag.min(), flat_sorted_by_mag_mag.max(), nbins+1)
+    centers_mag = 0.5 * (edges_mag[:-1] + edges_mag[1:])
 
     # create bins 
-    bin_idx = np.digitize(flat_sorted_by_mag, edges) - 1
-    bin_idx = np.clip(bin_idx, 0, nbins-1)
+    bin_idx_1 = np.digitize(flat_sorted_by_mag_time, edges_time) - 1
+    bin_idx_1 = np.clip(bin_idx_1, 0, nbins-1)
 
-    sums   = np.bincount(bin_idx, weights=flat_sorted_by_mag, minlength=nbins)
-    counts = np.bincount(bin_idx,           minlength=nbins)
+    sums_time   = np.bincount(bin_idx_1, weights=flat_sorted_by_mag_time, minlength=nbins)
+    counts_time = np.bincount(bin_idx_1,           minlength=nbins)
 
-    means = np.empty_like(centers)
+    sums_energy   = np.bincount(bin_idx_1, weights=flat_sorted_by_mag_energy, minlength=nbins)
+    counts_energy = np.bincount(bin_idx_1,           minlength=nbins)
+    sums_mag   = np.bincount(bin_idx_1, weights=flat_sorted_by_mag_mag, minlength=nbins)
+    counts_mag = np.bincount(bin_idx_1,           minlength=nbins)
+
+    means_time = np.empty_like(centers_time)
+    means_energy = np.empty_like(centers_energy)
+    means_mag = np.empty_like(centers_mag)
     # normal division where counts>0
-    np.divide(sums, counts, out=means, where=(counts>0))
+    np.divide(sums_time, counts_time, out=means_time, where=(counts_time>0))
+    np.divide(sums_energy, counts_energy, out=means_energy, where=(counts_energy>0))
+    np.divide(sums_mag, counts_mag, out=means_mag, where=(counts_mag>0))
     # fill empty bins with the bin center
-    empty = (counts == 0)
-    means[empty] = centers[empty]
-    return means
+    valid = counts_time > 0
+    empty = ~valid
+    means_time[empty] = centers_time[empty]
+    means_energy[empty] = np.interp(centers_time[empty],
+                                    centers_time[valid], means_energy[valid])
+    means_mag[empty]    = np.interp(centers_time[empty],
+                                    centers_time[valid], means_mag[valid])
+    return means_time, means_energy, means_mag
 
 
 import multiprocessing as mp
@@ -521,7 +549,7 @@ def run_until_truncation(seed: int,
                          H: int,
                          L: int) -> tuple[float, list[float], list[float]]:
     random.seed(seed)
-    beta = math.log((3 + error_rate) / error_rate) / 3
+    # beta = math.log((3 + error_rate) / error_rate) / 3
     time_list = []
     energy_list = []
     mag_list =[]
@@ -585,10 +613,11 @@ def run_until_truncation_mag(seeds: int,
                          logical: int,
                          error_rate: float,
                          H: int,
-                         L: int):
+                         L: int,
+                         beta1: float):
     
     E = H * L
-
+    beta = math.log((3 + error_rate) / error_rate) / 3 if beta1 is None else beta1
     num_runs  = seeds
     num_steps = steps
 
@@ -604,13 +633,14 @@ def run_until_truncation_mag(seeds: int,
         x = lattice_space(H, L)
         logicals = logical_operators(x)
         lattice = logicals[logical].copy()
+        lattice = monte_carlo_error(lattice, 1 , 0.5)
         
 
         energy_list = []
         time_list   = []            # if bkl populates it; otherwise you can drop it
         mags = []
         for i in range(num_steps):
-            lattice = bkl(lattice, 1, error_rate, energy_list,  time_list, mag_list=mags)
+            lattice = bkl(lattice, 1, error_rate, energy_list,  time_list, mag_list=mags, Beta = beta1)
             if i % 20 == 0: #and not logical_checks(lattice, logical):
                 mem_times.append(np.sum( time_list))
                 
@@ -622,13 +652,15 @@ def run_until_truncation_mag(seeds: int,
         decoder_times[run_idx, :] = time_list  # if bkl populates it; otherwise you can drop it
         decoder_mag[run_idx, :] = mags  # Store the magnetization trajectory
     # compute average (and normalize)
-    mean_energy = decoder_trajs.mean(axis=0) / E
-    std_decoder = decoder_trajs.std(axis=0) / E
+    # mean_energy = decoder_trajs.mean(axis=0) / E
+    # std_decoder = decoder_trajs.std(axis=0) / E
     time_lists_full = [np.cumsum(tl) for tl in decoder_times]
-    mean_times_cum = time_bin(time_lists_full)
+    mean_times_cum, mean_energy, mean_mag = time_bin(time_lists_full, decoder_trajs, decoder_mag)
+    mean_energy = mean_energy / E
+    mean_mag = mean_mag / E
     # mean_times = decoder_times.mean(axis=0)  # dT list  
-    # mean_times_cum = np.cumsum(mean_times)  # Cumulative sum of time steps
-    mean_mag = decoder_mag.mean(axis=0) /E  # Store the average magnetization trajectory
+
+    # mean_mag = decoder_mag.mean(axis=0) /E  # Store the average magnetization trajectory
     mean_mem = np.mean(mem_times)
     # mean_step = np.mean(mem_times[:,0])
     
@@ -644,6 +676,8 @@ def run_until_truncation_mag(seeds: int,
     plt.plot(mean_times_cum, mean_energy, color ='blue', label='energy')
     plt.plot(mean_times_cum, mean_mag, color ='green', label='magnitization')
     plt.axvline(x=mean_mem, color='red', linestyle='--', linewidth=2, label= f'{mean_mem}')
+    m = 1/2 - 1/2 * np.exp(-2*mean_times_cum/beta)
+    plt.plot(mean_times_cum, m, color='orange', linestyle='--', linewidth=2, label= f'1/2 - 1/2 * exp(-t/beta)')
     # plt.plot(x, bar_list, color ='red',  label='2000 step errors without decoding')
     plt.xlabel('physical times')
     plt.ylabel('Energy')
@@ -713,12 +747,15 @@ def main():
     # parser.add_argument('--seeds', type=int, nargs='+', default= list(range(100)),
     #                     help='Random seed for reproducibility.')
     
-    parser.add_argument('--seeds', type=int,  default= 100,
+    parser.add_argument('--seeds', type=int,  default=100,
                         help='Random seed for reproducibility.')
     parser.add_argument('--logical', type=int, default=3,
                         help='Index of logical operator to test (default: 3, all up).')
     
-    parser.add_argument('--error_rate', type=float, default=  0.0001,
+    parser.add_argument('--error_rate', type=float, default=0.0001,
+                        help='Physical Error rate for the BKL update.')
+    
+    parser.add_argument('--beta', type=float, default=None,
                         help='Physical Error rate for the BKL update.')
 
     parser.add_argument('--H', type=int, default=12,
@@ -736,7 +773,8 @@ def main():
     H = args.H
     L = args.L
     steps = args.steps
-    run_until_truncation_mag(seeds, steps, logical, error_rate, H, L)
+    beta = args.beta
+    run_until_truncation_mag(seeds, steps, logical, error_rate, H, L, beta1 = beta)
 
 
 
@@ -744,15 +782,16 @@ def main():
 def main_main():
     parser = argparse.ArgumentParser(description='Run memory time simulation.')
 
-    parser.add_argument('--seeds', type=int, nargs='+', default= list(range(100)),
+    parser.add_argument('--seeds', type=int, nargs='+', default=list(range(100)),
                         help='Random seed for reproducibility.')
-    
+    # $(seq 0 2 1998)
     parser.add_argument('--logical', type=int, default=3,
                         help='Index of logical operator to test (default: 3, all up).')
     
-    parser.add_argument('--error_rate', type=float, default=  0.0001,
+    parser.add_argument('--error_rate', type=float, default=0.0001,
                         help='Physical Error rate for the BKL update.')
-
+    
+    
     parser.add_argument('--H', type=int, default=12,
                         help='Lattice Height.')
 
@@ -765,6 +804,7 @@ def main_main():
     error_rate = args.error_rate
     H = args.H
     L = args.L
+    print(error_rate)
     
 
 
@@ -872,7 +912,7 @@ def main_correlation():
     # print(f"Wrote results.csv with {len(args.seeds)} rows.")
 
     time_lists_full = [np.cumsum(time_lists[k]) for k in range(len(seeds))]
-    avg_t = time_bin(time_lists_full)
+    avg_t, _, _ = time_bin(time_lists_full)
     # avg_dt = [ sum(col)/len(col) for col in zip(*time_lists) ]
     # avg_dt = time_lists[0]  # Assuming all time lists are the same length
     avg_c0 = [ sum(col)/len(col)  for col in zip(*correlations0) ]
