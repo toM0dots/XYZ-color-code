@@ -633,7 +633,7 @@ def run_until_truncation_mag(seeds: int,
         x = lattice_space(H, L)
         logicals = logical_operators(x)
         lattice = logicals[logical].copy()
-        lattice = monte_carlo_error(lattice, 1 , 0.5)
+        # lattice = monte_carlo_error(lattice, 1 , 0.5)
         
 
         energy_list = []
@@ -656,14 +656,14 @@ def run_until_truncation_mag(seeds: int,
     # std_decoder = decoder_trajs.std(axis=0) / E
     time_lists_full = [np.cumsum(tl) for tl in decoder_times]
     mean_times_cum, mean_energy, mean_mag = time_bin(time_lists_full, decoder_trajs, decoder_mag)
-    mean_energy = mean_energy / E
-    mean_mag = mean_mag / E
+    
     # mean_times = decoder_times.mean(axis=0)  # dT list  
 
     # mean_mag = decoder_mag.mean(axis=0) /E  # Store the average magnetization trajectory
     mean_mem = np.mean(mem_times)
     # mean_step = np.mean(mem_times[:,0])
     
+    ref_energy = 1/( 1 + np.exp( beta ))
     #=========== data save ==============
     with open('./results/mags.csv', 'w', newline='') as f:
         writer = csv.writer(f)
@@ -672,12 +672,16 @@ def run_until_truncation_mag(seeds: int,
         # write row by row
         writer.writerows(zip(mean_times_cum, mean_mag, mean_energy))
     # x = np.arange(5000)
+    mean_energy = mean_energy / E
+    mean_mag = mean_mag / E
     plt.figure(figsize=(10, 4))
     plt.plot(mean_times_cum, mean_energy, color ='blue', label='energy')
     plt.plot(mean_times_cum, mean_mag, color ='green', label='magnitization')
     plt.axvline(x=mean_mem, color='red', linestyle='--', linewidth=2, label= f'{mean_mem}')
     m = 1/2 - 1/2 * np.exp(-2*mean_times_cum/beta)
     plt.plot(mean_times_cum, m, color='orange', linestyle='--', linewidth=2, label= f'1/2 - 1/2 * exp(-t/beta)')
+    plt.axhline(y = ref_energy, color='purple', linestyle='--', linewidth=2, label= f'1/(1+exp(beta))={ref_energy:.3f}')
+
     # plt.plot(x, bar_list, color ='red',  label='2000 step errors without decoding')
     plt.xlabel('physical times')
     plt.ylabel('Energy')
