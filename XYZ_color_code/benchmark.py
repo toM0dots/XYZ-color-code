@@ -76,8 +76,16 @@ def nonzero_random():
         r = 1.0- random.random()
     return r
 
-def bkl(lattice, steps, error_rate, energy_hist=[], time_list=[0], spin_list=[], mag_list = [], nw = [], sw= [], correction = True, Beta=None):
+def bkl(lattice, steps, error_rate, energy_hist=None, time_list=None, spin_list=None, mag_list = None, nw = None, sw= None, correction = True, Beta=None):
     f = 1e-8
+ #=========== Initialize parameters ===========
+    if energy_hist is None: energy_hist = []
+    if time_list   is None: time_list   = [0]
+    if spin_list   is None: spin_list   = []
+    if nw          is None: nw          = []
+    if sw          is None: sw          = []
+    # if configs     is None: configs     = []
+
     if Beta is None:
         beta = math.log((3+error_rate)/error_rate)/3
     else:
