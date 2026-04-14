@@ -11,7 +11,7 @@ import copy
 # initialize the codespace with only A-stabilizer 
 
 def lattice_space(H, L):
-    lattice = np.zeros((H, L))
+    lattice = np.zeros((H, L), dtype=np.uint8)
     for i in range(H):
         for j in range(L):
             if i % 3 == 0 and j % 3 != 0:
@@ -23,17 +23,24 @@ def lattice_space(H, L):
     return lattice
 import random
 
+def as_bits01(a):
+    a = np.asarray(a)
+    if a.dtype.kind in "fc":           
+        a = (a > 0.5).astype(np.uint8) 
+    else:
+        a = (a.astype(np.int64) & 1).astype(np.uint8)
+    return a
+
 def energy(lattice):
     
     H = lattice.shape[0]
     L = lattice.shape[1]
+    lat = as_bits01(lattice)
     energy = 0
-    for i in range(H):
-        for j in range(L):
-            # Periodic boundary conditions
-            right = lattice[(i+1)% H, (j+1) % L]
-            down  = lattice[(i+1) % H, j]
-            energy +=  (lattice[i, j] + right + down)% 2
+    a_i1_j  = np.roll(lat, -1, axis=0)          # a[i+1,j]
+    a_i1_j1 = np.roll(a_i1_j, -1, axis=1)     # a[i+1,j+1]
+    en = lat ^ a_i1_j ^ a_i1_j1               # XOR
+    energy = np.sum(en)
     return energy
 
 def compute_dE(lattice, i, j):
@@ -78,21 +85,14 @@ def nonzero_random():
         r = 1.0- random.random()
     return r
 
-def bkl(lattice, steps, error_rate, energy_hist= None, time_list= None, spin_list= None, nw = None, sw= None, correction = True, debug = False, config=False):
+def bkl(lattice, steps, error_rate, energy_hist= None, time_list= None):
     if energy_hist is None: energy_hist = []
     if time_list   is None: time_list   = []
-    if spin_list   is None: spin_list   = []
-    if nw          is None: nw          = []
-    if sw          is None: sw          = []
-
-    configs     = []
-    total_R = []
     f = 1e-8
     beta = math.log((3+error_rate)/error_rate)/3
     H = lattice.shape[0]
     L = lattice.shape[1]
     # mag_list =[]
-    spin_class_check = []
     for step in range(steps):
 
         # Create a dictionary to group spin flips by their energy change (dE)
@@ -109,29 +109,32 @@ def bkl(lattice, steps, error_rate, energy_hist= None, time_list= None, spin_lis
                     classes[ 1].append((i, j))
                 elif dE == 3:
                     classes[ 3].append((i, j))
-                # classes[dE].append((i, j))
-        row = np.array([len(classes.get(-3, [])), len(classes.get(-1, [])), len(classes.get( 1, [])), len(classes.get( 3, []))])
-        # for dE in (-3, -1, 1, 3):
-        #     classes.setdefault(dE, [])
-        spin_class_check.append(copy.deepcopy(classes))
-        nw.append(row)
-        # Calculate transition rates for each class:
-        # For spins where flipping lowers energy (dE <= 0), acceptance probability is 1;
-        # for dE > 0, it is dE*(1-exp(-beta * dE))
+
+        # classes = {-6:[], -2:[], 2:[], 6:[]}
+        # # For each spin, compute its energy change upon flipping
+        # for i in range(H):
+        #     for j in range(L):
+        #         dE = 2*compute_dE(lattice, i, j)
+        #         if dE == -6:
+        #             classes[-6].append((i, j))
+        #         elif dE == -2:
+        #             classes[-2].append((i, j))
+        #         elif dE == 2:
+        #             classes[ 2].append((i, j))
+        #         elif dE == 6:
+        #             classes[ 6].append((i, j))
+
         rates = {}
         total_rate = 0.0
         for dE in sorted(classes):
-            if correction == True:
-                rate = len(classes[dE])* (dE / (np.exp(beta * dE)-1 ) )#- error_rate)
-            else:
-                rate = error_rate
+            rate = len(classes[dE])* (dE / (np.exp(beta * dE)-1 ) )#- error_rate)
             rates[dE] = rate
             total_rate += rate
         if total_rate == 0:
-            print(len(classes), "total_rate is 0")
-            continue
-        rate_row = np.array([rates.get(-3, 0.0), rates.get(-1, 0.0), rates.get(1, 0.0), rates.get(3, 0.0)])
-        sw.append(rate_row)
+            print("num of dE is", len(classes) )
+            print('rate classes', rates)
+            print('en classes', classes)
+            raise ValueError('total rate is 0')
         # rate_list = []
         # rate_list.append(total_rate)
         # Choose a class according to the rates (weighted selection)
@@ -141,75 +144,176 @@ def bkl(lattice, steps, error_rate, energy_hist= None, time_list= None, spin_lis
         for dE in sorted(rates):
             cumulative += rates[dE]
             if r <= cumulative :
-                # print("hi")
                 chosen_class = dE
                 break
         if total_rate == 0.0:
             raise ValueError("Total rate is zero, cannot choose a class.")
-        spin_list.append(chosen_class)   
-        
-        configs.append(copy.deepcopy(lattice))
         energy_hist.append(energy(lattice))
         
         if len(classes[chosen_class]) == 0 or chosen_class not in classes: 
             raise ValueError("Chosen class has no spins to flip.")
         
-        E_prev = energy(lattice)
         # From the chosen class, select a spin uniformly at random
         i, j = random.choice(classes[chosen_class]) 
         # Flip the spin
         lattice[i, j] = (lattice[i, j] + 1) % 2 
-        E_new = energy(lattice)
-
-    # ============= spin flip check ==========
-        check = np.zeros((H,L))
-        check[i,j] = 1
-        if len(configs)>0 and not np.array_equal(((lattice + check) % 2) , configs[-1] ) :
-            print('i,j', i, j)
-            print('current config\n', lattice)
-           
-            print('last config\n', configs[-1])
-            print('step', step)
-            raise ValueError('Spin not flipped correctly')
-        
-
-    # ============= energy check ==========
-        if E_new != E_prev + chosen_class:
-            print('current energy', energy_hist[-1] )
-            print('dE', chosen_class)
-            print('last enregy', energy_hist[-2])
-            print('spin config\n', lattice)
-            print('i,j', i, j)
-            print('step', len(energy_hist))
-            print('energ list', energy_hist)
-            print('rate', rates)
-            print('previsou config\n', configs[-2])
-            print('current config\n', configs[-1])
-            print('before before config\n', configs[-3])
-            raise ValueError('Energy not consistent')  
-         
-    # ============= rate check ============  
-        # if len(rate)
-
-
         rho3 = nonzero_random()
         dT = 1/total_rate * -np.log(rho3)
-
-        total_R.append(total_rate)
         
         time_list.append(dT)
-        # mag_list.append(np.sum(lattice) / (H * L))
-    if debug:
-        return lattice, beta, rates
-    elif config:
-        return lattice, energy_hist, time_list, np.array(configs), np.array(total_R), spin_class_check
-    else:
-        return lattice
+        step +=1
+    return lattice, energy_hist, time_list
 
 
 
-# optimal decoder
 import numpy as np
+import math
+
+# classes you use (scaled by 2 in your code)
+DE_VALUES = np.array([-6, -2, 2, 6], dtype=np.int16)
+DE_TO_K = {int(dE): k for k, dE in enumerate(DE_VALUES)}
+
+def compute_dE_scaled2(lat, i, j):
+    # your compute_dE but returns 2*dE and uses uint8 lattice
+    H, L = lat.shape
+    s  = lat[i, j]
+    ds = s ^ 1  # flip bit
+
+    left   = lat[i, (j-1) % L] + lat[(i-1) % H, (j-1) % L]
+    right  = lat[(i-1) % H, j] + lat[i, (j+1) % L]
+    bottom = lat[(i+1) % H, j] + lat[(i+1) % H, (j+1) % L]
+
+    E     = ((left + s) & 1) + ((right + s) & 1) + ((bottom + s) & 1)
+    E_new = ((left + ds) & 1) + ((right + ds) & 1) + ((bottom + ds) & 1)
+
+    dE = int(E_new - E)          # in {-3,-1,1,3}
+    return 2 * dE                # in {-6,-2,2,6}
+
+class BKL_NM:
+    def __init__(self, lattice, error_rate, seed=None):
+        self.lat = (np.asarray(lattice, dtype=np.uint8) & 1)
+        self.H, self.L = self.lat.shape
+        self.N = self.H * self.L
+        self.rng = np.random.default_rng(seed)
+
+        self.beta = math.log((3 + error_rate) / error_rate) / 3.0
+
+        # per-class per-site rate (constant for a given dE)
+        self.rate_per_site = np.array(
+            [dE / (math.exp(self.beta * dE) - 1.0) for dE in DE_VALUES],
+            dtype=float
+        )
+
+        # buckets
+        self.bucket = np.empty(self.N, dtype=np.int8)   # class index k for each site
+        self.pos    = np.empty(self.N, dtype=np.int32)  # position inside sites[k]
+        self.sites  = np.empty((len(DE_VALUES), self.N), dtype=np.int32)
+        self.n      = np.zeros(len(DE_VALUES), dtype=np.int32)
+
+        # optional: track energy incrementally
+        self.E = None
+
+        self._init_classes()
+
+    def _s2ij(self, s):
+        return divmod(int(s), self.L)
+
+    def _ij2s(self, i, j):
+        return int(i) * self.L + int(j)
+
+    def _add_to_class(self, s, k):
+        idx = self.n[k]
+        self.sites[k, idx] = s
+        self.pos[s] = idx
+        self.bucket[s] = k
+        self.n[k] += 1
+
+    def _remove_from_class(self, s, k):
+        idx = self.pos[s]
+        last_idx = self.n[k] - 1
+        last_s = self.sites[k, last_idx]
+        # swap remove
+        self.sites[k, idx] = last_s
+        self.pos[last_s] = idx
+        self.n[k] -= 1
+
+    def _move_class(self, s, k_new):
+        k_old = int(self.bucket[s])
+        if k_old == k_new:
+            return
+        self._remove_from_class(s, k_old)
+        self._add_to_class(s, k_new)
+
+    def _init_classes(self):
+        # build initial class membership in O(HL)
+        for i in range(self.H):
+            for j in range(self.L):
+                dE = compute_dE_scaled2(self.lat, i, j)
+                k = DE_TO_K[dE]
+                s = self._ij2s(i, j)
+                self._add_to_class(s, k)
+
+        # initialize energy once if you want it
+        # (fast enough to do once)
+        self.E = None
+
+    def _affected_sites(self, i, j):
+        H, L = self.H, self.L
+        return [
+            (i, j),
+            (i, (j-1) % L), (i, (j+1) % L),
+            ((i+1) % H, j), ((i+1) % H, (j+1) % L),
+            ((i-1) % H, j), ((i-1) % H, (j-1) % L),
+        ]
+
+    def step(self):
+        """
+        One BKL event:
+        - choose class by rates
+        - choose random site within that class
+        - flip it
+        - update classes locally (7 sites)
+        - return dT and chosen dE (scaled2)
+        """
+        # rates for each class
+        counts = self.n.astype(float)
+        class_rates = counts * self.rate_per_site
+        total_rate = class_rates.sum()
+        if total_rate <= 0:
+            raise ValueError("total_rate <= 0 (no available moves?)")
+
+        r = self.rng.random() * total_rate
+        cum = 0.0
+        k = None
+        for kk in range(len(DE_VALUES)):
+            cum += class_rates[kk]
+            if r <= cum:
+                k = kk
+                break
+        if k is None:
+            k = len(DE_VALUES) - 1
+
+        # pick site uniformly from class k
+        idx = int(self.rng.integers(self.n[k]))
+        s = int(self.sites[k, idx])
+        i, j = self._s2ij(s)
+
+        # flip spin
+        self.lat[i, j] ^= 1
+
+        # update local dE classes for affected sites
+        for ii, jj in self._affected_sites(i, j):
+            ss = self._ij2s(ii, jj)
+            dE_new = compute_dE_scaled2(self.lat, ii, jj)
+            k_new = DE_TO_K[dE_new]
+            self._move_class(ss, k_new)
+
+        # exponential waiting time
+        rho = 1.0 - self.rng.random()
+        dT = (-math.log(rho)) / total_rate
+
+        return dT, int(DE_VALUES[k])
+
 
 def syndrome_detector(lattice):
     """
@@ -541,134 +645,9 @@ def correlation(spin_config: list, tau:int =4):
     return T- tau, correlation
 
 
-def _step_fill_uniform_1d(times, values, dt=None, n_steps=None,
-                          include_start=True, include_end=False):
-    """
-    Resample a step function defined by (times, values) onto a uniform grid
-    using left-hold (previous value) semantics.
-
-    Parameters
-    ----------
-    times : 1D array-like, strictly increasing
-    values: 1D array-like, same length as `times`
-    dt : float, optional
-        Target uniform step in physical time. If None, inferred from n_steps.
-    n_steps : int, optional
-        Number of uniform steps between times[0] and times[-1].
-        If provided, dt=(t_end - t_start)/n_steps.
-    include_start : bool, default True
-        Include the initial time t0 in the output grid.
-    include_end : bool, default False
-        Include the final time t_end in the output grid.
-
-    Returns
-    -------
-    t_out, v_out : 1D ndarray
-        Uniform grid times and left-hold values.
-    """
-    t = np.asarray(times, dtype=float)
-    v = np.asarray(values, dtype=float)
-    if t.ndim != 1 or v.ndim != 1 or len(t) != len(v) or len(t) < 2:
-        raise ValueError("times/values must be 1D, same length >=2")
-    if not np.all(np.diff(t) > 0):
-        raise ValueError("times must be strictly increasing")
-
-    t0, t1 = t[0], t[-1]
-    span = t1 - t0
-    if span <= 0:
-        # Degenerate: all times equal – just return a single sample
-        return (np.array([t0]) if include_start else np.array([]),
-                np.array([v[0]]) if include_start else np.array([]))
-
-    if dt is None and n_steps is None:
-        raise ValueError("Specify either dt or n_steps")
-    if dt is None:
-        if n_steps <= 0:
-            raise ValueError("n_steps must be positive")
-        dt = span / n_steps
-
-    # Build the uniform grid
-    eps = np.finfo(float).eps * max(1.0, abs(t1))
-    start = t0 if include_start else (t0 + dt)
-    stop  = (t1 + (eps if include_end else 0.0))
-    if start > stop + 1e-15:
-        # Nothing to sample
-        return np.array([], dtype=float), np.array([], dtype=float)
-    t_grid = np.arange(start, stop, dt)
-    if include_end and (t_grid.size == 0 or t_grid[-1] < t1 - 0.5*dt):
-        # Ensure exact inclusion if requested (avoid FP drift)
-        t_grid = np.r_[t_grid, t1]
-
-    # Left-hold: for each grid point τ, pick index i with t[i] <= τ < t[i+1]
-    idx = np.searchsorted(t, t_grid, side='right') - 1
-    # Clamp to valid range (could be -1 if τ < t0 due to numerical noise)
-    idx = np.clip(idx, 0, len(t) - 1)
-    v_grid = v[idx]
-    return t_grid, v_grid
 
 
-def step_fill_uniform(times, mags, dt=None, n_steps=None,
-                      include_start=False, include_end=False, per_seed=True):
-    """
-    Batch wrapper. Accepts:
-      - a single (times, mags) 1D pair, or
-      - lists/arrays of per-realization times and mags (ragged allowed).
-
-    If you pass multiple realizations:
-      * If dt is given, that same dt is used for every realization.
-      * If n_steps is given and dt is None:
-          - per_seed=True  → use each seed's own (t_end - t_start)/n_steps
-          - per_seed=False → compute a global dt from the *first* seed's span
-                             (or you can change to use global min/max if you prefer).
-
-    Returns
-    -------
-    T_out, M_out :
-        If single trace → (1D t_out, 1D m_out).
-        If batch        → (list of 1D arrays t_out_i, list of 1D arrays m_out_i).
-    """
-    # Detect single vs batch
-    def _is_1d_like(x):
-        return np.ndim(x) == 1
-
-    # Single trace
-    if _is_1d_like(times) and _is_1d_like(mags):
-        return _step_fill_uniform_1d(times, mags, dt=dt, n_steps=n_steps,
-                                     include_start=include_start, include_end=include_end)
-
-    # Batch: each element of times/mags is a 1D array-like for one realization
-    if len(times) != len(mags):
-        raise ValueError("For batch input, lengths of times and mags lists must match")
-
-    # Resolve dt per seed if needed
-    if dt is not None:
-        dts = [float(dt)] * len(times)
-    else:
-        if n_steps is None:
-            raise ValueError("For batch input, specify dt or n_steps")
-        if per_seed:
-            dts = []
-            for ti in times:
-                ti = np.asarray(ti, dtype=float)
-                if ti.size < 2:
-                    raise ValueError("Each seed must have at least 2 timestamps")
-                dts.append((ti[-1] - ti[0]) / n_steps)
-        else:
-            t0 = np.asarray(times[0], dtype=float)
-            base_dt = (t0[-1] - t0[0]) / n_steps
-            dts = [base_dt] * len(times)
-
-    T_out, M_out = [], []
-    for ti, mi, dti in zip(times, mags, dts):
-        t_i, m_i = _step_fill_uniform_1d(ti, mi, dt=dti, n_steps=None,
-                                         include_start=include_start, include_end=include_end)
-        T_out.append(t_i)
-        M_out.append(m_i)
-    return T_out, M_out
-
-
-def time_bin(time_lists:list, decoder_mag:list):
- def spin_classify(patterns:list, ordering = False):
+def spin_classify(patterns:list, ordering = False):
     flat_each = [ [x for row in m for x in row] for m in patterns ]
     keys = []
     for flat in flat_each:
@@ -759,7 +738,6 @@ def is_subset(
     else:
         raise ValueError("mode must be 'set', 'multiset', or 'subsequence'")
 
-import numpy as np
 
 def time_bin(t_end, x_interval, extend_right=False):
     """
@@ -805,59 +783,6 @@ def time_bin(t_end, x_interval, extend_right=False):
     mean = np.nanmean(out, axis=0)
     return edges, mean
 
-
-
-def time_bin_1(time_lists:list, decoder_mag:list):
-    """
-    Bins the time lists into intervals of size bin_size.
-    Returns a list of binned times and their corresponding counts.
-    """
-    # flatten cumsum lists in one and divide by equllength bins
-    N, T = np.array(time_lists).shape
-    time_finer = np.zeros((N, (T-1)*10))
-    mag_finer = np.zeros((N, (T-1)*10))
-    min_t = min([min(np.diff(tl)) for tl in time_lists])
-    # for i in range(N):
-    #     time_finer[i], mag_finer[i] = step_fill_uniform(time_lists[i], decoder_mag[i], n_steps=(T-1)*10)
-    time_finer, mag_finer = step_fill_uniform(time_lists, decoder_mag, n_steps=(T-1)*30)
-    flattened_time = np.concatenate(time_finer)
-    flattened_mag = np.concatenate(mag_finer)
-
-    order_time = np.argsort(np.abs(flattened_time))
-    flat_sorted_by_mag_time = flattened_time[order_time]
-    flat_sorted_by_mag_mag = flattened_mag[order_time]
-
-    nbins = np.array(time_lists).shape[1]
-    edges_time = np.linspace(flat_sorted_by_mag_time.min(), flat_sorted_by_mag_time.max(), nbins+1)
-    centers_time = 0.5 * (edges_time[:-1] + edges_time[1:])
-
-    edges_mag = np.linspace(flat_sorted_by_mag_mag.min(), flat_sorted_by_mag_mag.max(), nbins+1)
-    centers_mag = 0.5 * (edges_mag[:-1] + edges_mag[1:])
-
-    # create bins 
-    bin_idx_1 = np.digitize(flat_sorted_by_mag_time, edges_time) - 1
-    bin_idx_1 = np.clip(bin_idx_1, 0, nbins-1)
-
-    sums_time   = np.bincount(bin_idx_1, weights=flat_sorted_by_mag_time, minlength=nbins)
-    counts_time = np.bincount(bin_idx_1,           minlength=nbins)
-
-    sums_mag   = np.bincount(bin_idx_1, weights=flat_sorted_by_mag_mag, minlength=nbins)
-    counts_mag = np.bincount(bin_idx_1,           minlength=nbins)
-
-    means_time = np.empty_like(centers_time)
-    means_mag = np.empty_like(centers_mag)
-    # normal division where counts>0
-    np.divide(sums_time, counts_time, out=means_time, where=(counts_time>0))
-    np.divide(sums_mag, counts_mag, out=means_mag, where=(counts_mag>0))
-    # fill empty bins with the bin center
-    valid = counts_time > 0
-    empty = ~valid
-    means_time[empty] = centers_time[empty]
-
-    means_mag[empty]    = np.interp(centers_time[empty],
-                                    centers_time[valid], means_mag[valid])
-    return means_time,  means_mag
-
 import multiprocessing as mp
 
 def run_until_truncation(seed: int,
@@ -888,12 +813,12 @@ def run_until_truncation(seed: int,
           57: 407959.47402282,
           99: 275285.79732844,
           195:  254027.27736396}
-    
+    print('seed:', seed)
     decoder_step = 1
     truncated = False
     while not truncated:
         step += 1
-        lattice, e, t, spin_config2, total_R, spin_class_check = bkl(lattice, 1, error_rate, config = True)
+        lattice, e, t = bkl(lattice, 1, error_rate)
         energy_list.append(e[0])
         time_list.append(t[0])
         mag_list.append(lattice.sum())
@@ -905,7 +830,25 @@ def run_until_truncation(seed: int,
             decoder_step += 1
             # print(f"Truncated at step {step} with total time {sum(time_list)} ms")
     mem_time = sum(time_list)
-    return mem_time, energy_list,  mag_list
+    truncated = False
+    time_list = []
+    energy_list = []
+    mag_list =[]
+    while not truncated:
+        step += 1
+        lattice, e, t = bkl(lattice, 1, error_rate)
+        energy_list.append(e[0])
+        time_list.append(t[0])
+        mag_list.append(lattice.sum())
+        # lattice = monte_carlo_error(lattice, 1 , error_rate)
+        # if step % 10 == 0 and not logical_checks(lattice, logical):
+        #     break
+        if sum(time_list) > tt[H] * decoder_step / 1000:
+            truncated = not logical_checks(lattice, logical)
+            decoder_step += 1
+            # print(f"Truncated at step {step} with total time {sum(time_list)} ms")
+    mem_time1 = sum(time_list)
+    return min(mem_time, mem_time1), energy_list,  mag_list
 #    mem_times.append(list(mem_time))
 #    energies.append(list(energy_list))
 #    mags.append(list(mag_list))
@@ -953,6 +896,7 @@ def run_until_truncation_mag(seeds: int,
         logicals = logical_operators(x)
         lattice = copy.deepcopy(logicals[logical])
         # lattice = monte_carlo_error(lattice, 1 , 0.5)
+        engine = BKL_NM(lattice, error_rate, seed=seed)
         
 
         energy_list = []
@@ -1064,8 +1008,8 @@ def run_until_truncation_correlation(seed: int,
     
     return time_list, correlations0, correlations1, correlations2, correlations3
 
-def main():
-# def main_mag():
+# def main():
+def main_mag():
     parser = argparse.ArgumentParser(description='Run memory time simulation.')
 
     # parser.add_argument('--seeds', type=int, nargs='+', default= list(range(100)),
@@ -1102,8 +1046,8 @@ def main():
 
 
 
-# def main():
-def main_main():
+def main():
+# def main_main():
     parser = argparse.ArgumentParser(description='Run memory time simulation.')
 
     parser.add_argument('--seeds', type=int,  default=2000,
