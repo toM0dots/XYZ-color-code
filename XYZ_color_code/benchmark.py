@@ -87,6 +87,7 @@ def bkl(lattice, steps, error_rate, energy_hist= None, time_list= None, spin_lis
 
     configs     = []
     total_R = []
+    mag_list = []
     f = 1e-8
     beta = math.log((3+error_rate)/error_rate)/3
     H = lattice.shape[0]
@@ -111,10 +112,7 @@ def bkl(lattice, steps, error_rate, energy_hist= None, time_list= None, spin_lis
                     classes[ 3].append((i, j))
                 # classes[dE].append((i, j))
         row = np.array([len(classes.get(-3, [])), len(classes.get(-1, [])), len(classes.get( 1, [])), len(classes.get( 3, []))])
-        # for dE in (-3, -1, 1, 3):
-        #     classes.setdefault(dE, [])
-        spin_class_check.append(copy.deepcopy(classes))
-        nw.append(row)
+        
         # Calculate transition rates for each class:
         # For spins where flipping lowers energy (dE <= 0), acceptance probability is 1;
         # for dE > 0, it is dE*(1-exp(-beta * dE))
@@ -130,10 +128,7 @@ def bkl(lattice, steps, error_rate, energy_hist= None, time_list= None, spin_lis
         if total_rate == 0:
             print(len(classes), "total_rate is 0")
             continue
-        rate_row = np.array([rates.get(-3, 0.0), rates.get(-1, 0.0), rates.get(1, 0.0), rates.get(3, 0.0)])
-        sw.append(rate_row)
-        # rate_list = []
-        # rate_list.append(total_rate)
+            
         # Choose a class according to the rates (weighted selection)
         r = np.random.uniform(0, total_rate)
         cumulative = 0.0
@@ -141,18 +136,8 @@ def bkl(lattice, steps, error_rate, energy_hist= None, time_list= None, spin_lis
         for dE in sorted(rates):
             cumulative += rates[dE]
             if r <= cumulative :
-                # print("hi")
                 chosen_class = dE
                 break
-        if total_rate == 0.0:
-            raise ValueError("Total rate is zero, cannot choose a class.")
-        spin_list.append(chosen_class)   
-        
-        configs.append(copy.deepcopy(lattice))
-        energy_hist.append(energy(lattice))
-        
-        if len(classes[chosen_class]) == 0 or chosen_class not in classes: 
-            raise ValueError("Chosen class has no spins to flip.")
         
         E_prev = energy(lattice)
         # From the chosen class, select a spin uniformly at random
@@ -161,32 +146,49 @@ def bkl(lattice, steps, error_rate, energy_hist= None, time_list= None, spin_lis
         lattice[i, j] = (lattice[i, j] + 1) % 2 
         E_new = energy(lattice)
 
-    # ============= spin flip check ==========
-        check = np.zeros((H,L))
-        check[i,j] = 1
-        if len(configs)>0 and not np.array_equal(((lattice + check) % 2) , configs[-1] ) :
-            print('i,j', i, j)
-            print('current config\n', lattice)
-           
-            print('last config\n', configs[-1])
-            print('step', step)
-            raise ValueError('Spin not flipped correctly')
+        if total_rate == 0.0:
+            raise ValueError("Total rate is zero, cannot choose a class.")
+        
+        
+        if len(classes[chosen_class]) == 0 or chosen_class not in classes: 
+            raise ValueError("Chosen class has no spins to flip.")
+        
+        if debug:
+            # spin_class_check.append(copy.deepcopy(classes))
+            nw.append(row)
+            rate_row = np.array([rates.get(-3, 0.0), rates.get(-1, 0.0), rates.get(1, 0.0), rates.get(3, 0.0)])
+            sw.append(rate_row)
+            spin_list.append(chosen_class)   
+            configs.append(copy.deepcopy(lattice))
+            total_R.append(total_rate)
         
 
-    # ============= energy check ==========
-        if E_new != E_prev + chosen_class:
-            print('current energy', energy_hist[-1] )
-            print('dE', chosen_class)
-            print('last enregy', energy_hist[-2])
-            print('spin config\n', lattice)
-            print('i,j', i, j)
-            print('step', len(energy_hist))
-            print('energ list', energy_hist)
-            print('rate', rates)
-            print('previsou config\n', configs[-2])
-            print('current config\n', configs[-1])
-            print('before before config\n', configs[-3])
-            raise ValueError('Energy not consistent')  
+        # ============= spin flip check ==========
+            check = np.zeros((H,L))
+            check[i,j] = 1
+            if len(configs)>0 and not np.array_equal(((lattice + check) % 2) , configs[-1] ) :
+                print('i,j', i, j)
+                print('current config\n', lattice)
+            
+                print('last config\n', configs[-1])
+                print('step', step)
+                raise ValueError('Spin not flipped correctly')
+            
+
+        # ============= energy check ==========
+            if E_new != E_prev + chosen_class:
+                print('current energy', energy_hist[-1] )
+                print('dE', chosen_class)
+                print('last enregy', energy_hist[-2])
+                print('spin config\n', lattice)
+                print('i,j', i, j)
+                print('step', len(energy_hist))
+                print('energ list', energy_hist)
+                print('rate', rates)
+                print('previsou config\n', configs[-2])
+                print('current config\n', configs[-1])
+                print('before before config\n', configs[-3])
+                raise ValueError('Energy not consistent')  
          
     # ============= rate check ============  
         # if len(rate)
@@ -195,18 +197,346 @@ def bkl(lattice, steps, error_rate, energy_hist= None, time_list= None, spin_lis
         rho3 = nonzero_random()
         dT = 1/total_rate * -np.log(rho3)
 
-        total_R.append(total_rate)
-        
-        time_list.append(dT)
-        # mag_list.append(np.sum(lattice) / (H * L))
+        if config:
+            energy_hist.append(energy(lattice))
+            time_list.append(dT)
+            mag_list.append(np.sum(lattice) / (H * L))
     if debug:
-        return lattice, beta, rates
+        out = {'spin_class_check': spin_class_check, 'nw': nw, 'sw': sw, 'spin_list': spin_list}
+        return out
     elif config:
-        return lattice, energy_hist, time_list, np.array(configs), np.array(total_R), spin_class_check
+        out = {'lattice': lattice, 'energy_hist': energy_hist, 'time_list': time_list, 'mag_list': mag_list}
+        return out
     else:
         return lattice
 
 
+def thermal_decoder_cached_step(
+    lattice,
+    error_rate,
+    b=None,
+    dE_array=None,
+    weight_array=None,
+    total_weight=None,
+    flags=None,
+    beta=None,
+    weight_rule="negative_boltzmann",
+    rng=None,
+    debug_check=False,
+):
+    """
+    Cached one-step zero-temperature-like thermal decoder.
+
+    negative_boltzmann rule:
+        weight = exp(-beta * dE) if dE < 0
+        weight = 0               if dE >= 0
+
+    Uses diagonal Newman-Moore geometry:
+        spin (i,j) touches:
+            b[i,j], b[i-1,j], b[i-1,j-1]
+    """
+
+    import numpy as np
+    import math
+
+    if rng is None:
+        rng = np.random.default_rng()
+
+    H, L = lattice.shape
+
+    if beta is None:
+        beta = math.log((3 + error_rate) / error_rate) / 3
+
+    if flags is None:
+        flags = np.zeros((H, L), dtype=bool)
+    else:
+        flags = np.asarray(flags, dtype=bool)
+
+    # ============================================================
+    # 1. Initialize cache if needed
+    # ============================================================
+
+    if b is None:
+        b = compute_b_nm(lattice).astype(np.uint8)
+    else:
+        b = b.astype(np.uint8, copy=False)
+
+    if dE_array is None or weight_array is None or total_weight is None:
+
+        bb = b.astype(np.int16)
+
+        # Diagonal convention:
+        # dE(i,j) depends on b[i,j], b[i-1,j], b[i-1,j-1]
+        touched = (
+            bb
+            + np.roll(bb, shift=1, axis=0)
+            + np.roll(np.roll(bb, shift=1, axis=0), shift=1, axis=1)
+        )
+
+        dE_array = (3 - 2 * touched).astype(np.int8)
+
+        dE_float = dE_array.astype(float)
+
+        if weight_rule == "boltzmann":
+            dE_float = dE_array.astype(float)
+            weight_array = np.exp(-beta * dE_float)
+
+        elif weight_rule == "negative_boltzmann":
+            weight_array = np.where(
+                dE_array < 0,
+                np.exp(-beta * dE_float),
+                0.0,
+            )
+
+        elif weight_rule == "metropolis":
+            weight_array = np.where(
+                dE_array <= 0,
+                1.0,
+                np.exp(-beta * dE_float),
+            )
+
+        elif weight_rule == "bkl":
+            denom = np.exp(beta * dE_float) - 1.0
+            weight_array = np.zeros_like(dE_float, dtype=float)
+
+            nonzero = np.abs(denom) > 1e-14
+            weight_array[nonzero] = dE_float[nonzero] / denom[nonzero]
+            weight_array[~nonzero] = 1.0 / beta
+
+        else:
+            raise ValueError(
+                "weight_rule must be 'boltzmann', 'negative_boltzmann', 'metropolis', or 'bkl'."
+            )
+
+        weight_array[flags] = 0.0
+        total_weight = float(weight_array.sum())
+
+    # ============================================================
+    # 2. No allowed thermal move
+    # ============================================================
+
+    if total_weight <= 0:
+        return {
+            "lattice": lattice,
+            "b": b,
+            "dE_array": dE_array,
+            "weight_array": weight_array,
+            "total_weight": total_weight,
+            "chosen_spin": None,
+            "chosen_dE": None,
+            "beta": beta,
+        }
+
+    # ============================================================
+    # 3. Choose spin by cached weights
+    # ============================================================
+
+    prob_flat = weight_array.ravel() / total_weight
+    flat_index = rng.choice(H * L, p=prob_flat)
+
+    i, j = np.unravel_index(flat_index, (H, L))
+
+    i = int(i)
+    j = int(j)
+
+    chosen_spin = (i, j)
+    chosen_dE = int(dE_array[i, j])
+
+    if debug_check:
+        E_before = energy(lattice)
+
+    # ============================================================
+    # 4. Flip chosen spin
+    # ============================================================
+
+    lattice[i, j] ^= 1
+
+    # ============================================================
+    # 5. Toggle affected syndrome bits
+    # ============================================================
+
+    # Diagonal geometry:
+    # spin (i,j) toggles b[i,j], b[i-1,j], b[i-1,j-1]
+    toggled_stabs = [
+        (i % H, j % L),
+        ((i - 1) % H, j % L),
+        ((i - 1) % H, (j - 1) % L),
+    ]
+
+    for a, c in toggled_stabs:
+        b[a, c] ^= 1
+
+    # ============================================================
+    # 6. Find spins whose dE values changed
+    # ============================================================
+
+    affected = set()
+
+    # If stabilizer b[a,c] changes, it affects spins:
+    # (a,c), (a+1,c), (a+1,c+1)
+    for a, c in toggled_stabs:
+        affected.add((a % H, c % L))
+        affected.add(((a + 1) % H, c % L))
+        affected.add(((a + 1) % H, (c + 1) % L))
+
+    # ============================================================
+    # 7. Locally update dE and weights
+    # ============================================================
+
+    for u, v in affected:
+
+        old_weight = weight_array[u, v]
+
+        # local dE from cached syndrome
+        touched = (
+            int(b[u % H, v % L])
+            + int(b[(u - 1) % H, v % L])
+            + int(b[(u - 1) % H, (v - 1) % L])
+        )
+
+        new_dE = 3 - 2 * touched
+        dE_array[u, v] = new_dE
+
+        if flags[u, v]:
+            new_weight = 0.0
+
+        else:
+            if weight_rule == "boltzmann":
+                new_weight = np.exp(-beta * new_dE)
+                
+            elif weight_rule == "negative_boltzmann":
+                if new_dE < 0:
+                    new_weight = float(np.exp(-beta * new_dE))
+                else:
+                    new_weight = 0.0
+
+            elif weight_rule == "metropolis":
+                if new_dE <= 0:
+                    new_weight = 1.0
+                else:
+                    new_weight = float(np.exp(-beta * new_dE))
+
+            elif weight_rule == "bkl":
+                denom = np.exp(beta * new_dE) - 1.0
+
+                if abs(denom) < 1e-14:
+                    new_weight = 1.0 / beta
+                else:
+                    new_weight = float(new_dE / denom)
+
+            else:
+                raise ValueError(
+                    "weight_rule must be 'boltzmann', 'negative_boltzmann', 'metropolis', or 'bkl'."
+                )
+
+        weight_array[u, v] = new_weight
+        total_weight += new_weight - old_weight
+
+    total_weight = float(total_weight)
+
+    if total_weight < 0 and abs(total_weight) < 1e-10:
+        total_weight = 0.0
+
+    # ============================================================
+    # 8. Debug checks
+    # ============================================================
+
+    if debug_check:
+
+        E_after = energy(lattice)
+
+        if E_after != E_before + chosen_dE:
+            print("Energy consistency failed.")
+            print("chosen spin:", chosen_spin)
+            print("chosen dE:", chosen_dE)
+            print("E before:", E_before)
+            print("E after:", E_after)
+            print("expected:", E_before + chosen_dE)
+            raise ValueError("Energy change does not match chosen dE.")
+
+        b_full = compute_b_nm(lattice).astype(np.uint8)
+
+        if not np.array_equal(b, b_full):
+            print("Syndrome cache failed.")
+            print("chosen spin:", chosen_spin)
+            print("cached b:")
+            print(b)
+            print("full b:")
+            print(b_full)
+            raise ValueError("Cached syndrome b does not match compute_b_nm(lattice).")
+
+        bb_full = b_full.astype(np.int16)
+
+        touched_full = (
+            bb_full
+            + np.roll(bb_full, shift=1, axis=0)
+            + np.roll(np.roll(bb_full, shift=1, axis=0), shift=1, axis=1)
+        )
+
+        dE_full = (3 - 2 * touched_full).astype(np.int8)
+
+        if not np.array_equal(dE_array, dE_full):
+            print("dE cache failed.")
+            print("chosen spin:", chosen_spin)
+            print("difference:")
+            print(dE_array - dE_full)
+            raise ValueError("Cached dE_array does not match full recomputation.")
+
+        dE_float_full = dE_full.astype(float)
+
+        if weight_rule == "boltzmann":
+            weight_full = np.exp(-beta * dE_float_full)
+
+        elif weight_rule == "negative_boltzmann":
+            weight_full = np.where(
+                dE_full < 0,
+                np.exp(-beta * dE_float_full),
+                0.0,
+            )
+
+        elif weight_rule == "metropolis":
+            weight_full = np.where(
+                dE_full <= 0,
+                1.0,
+                np.exp(-beta * dE_float_full),
+            )
+
+        elif weight_rule == "bkl":
+            denom = np.exp(beta * dE_float_full) - 1.0
+            weight_full = np.zeros_like(dE_float_full, dtype=float)
+
+            nonzero = np.abs(denom) > 1e-14
+            weight_full[nonzero] = dE_float_full[nonzero] / denom[nonzero]
+            weight_full[~nonzero] = 1.0 / beta
+
+        else:
+            raise ValueError(
+                "weight_rule must be 'negative_boltzmann', 'metropolis', or 'bkl'."
+            )
+
+        weight_full[flags] = 0.0
+
+        if not np.allclose(weight_array, weight_full):
+            print("weight cache failed.")
+            print("max abs diff:", np.max(np.abs(weight_array - weight_full)))
+            raise ValueError("Cached weight_array does not match full recomputation.")
+
+        if not np.isclose(total_weight, weight_full.sum()):
+            print("total weight failed.")
+            print("cached:", total_weight)
+            print("full:", weight_full.sum())
+            raise ValueError("Cached total_weight does not match full recomputation.")
+
+    return {
+        "lattice": lattice,
+        "b": b,
+        "dE_array": dE_array,
+        "weight_array": weight_array,
+        "total_weight": total_weight,
+        "chosen_spin": chosen_spin,
+        "chosen_dE": chosen_dE,
+        "beta": beta,
+    }
 
 # optimal decoder
 import numpy as np
