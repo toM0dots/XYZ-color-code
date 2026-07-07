@@ -403,7 +403,7 @@ def thermal_decoder_cached_step(
         else:
             if weight_rule == "boltzmann":
                 new_weight = np.exp(-beta * new_dE)
-                
+
             elif weight_rule == "negative_boltzmann":
                 if new_dE < 0:
                     new_weight = float(np.exp(-beta * new_dE))
@@ -538,6 +538,213 @@ def thermal_decoder_cached_step(
         "beta": beta,
     }
 
+def metropolis_cached_step(
+    lattice,
+    error_rate,
+    b=None,
+    dE_array=None,
+    flags=None,
+    beta=None,
+    rng=None,
+    debug_check=False,
+):
+    """
+    One true Metropolis attempted update.
+
+    Proposal:
+        choose spin uniformly.
+
+    Acceptance:
+        if dE <= 0: accept
+        if dE > 0: accept with probability exp(-beta*dE)
+
+    Rejected moves leave lattice/b/dE_array unchanged.
+
+    Uses diagonal NM geometry:
+        spin (i,j) touches b[i,j], b[i-1,j], b[i-1,j-1].
+    """
+
+    import numpy as np
+    import math
+
+    if rng is None:
+        rng = np.random.default_rng()
+
+    H, L = lattice.shape
+
+    if beta is None:
+        beta = math.log((3 + error_rate) / error_rate) / 3
+
+    if flags is None:
+        flags = np.zeros((H, L), dtype=bool)
+    else:
+        flags = np.asarray(flags, dtype=bool)
+
+    # ============================================================
+    # 1. Initialize cached syndrome and dE array if needed
+    # ============================================================
+
+    if b is None:
+        b = compute_b_nm(lattice).astype(np.uint8)
+    else:
+        b = b.astype(np.uint8, copy=False)
+
+    if dE_array is None:
+        bb = b.astype(np.int16)
+
+        touched = (
+            bb
+            + np.roll(bb, shift=1, axis=0)
+            + np.roll(np.roll(bb, shift=1, axis=0), shift=1, axis=1)
+        )
+
+        dE_array = (3 - 2 * touched).astype(np.int8)
+
+    # ============================================================
+    # 2. Uniformly propose one spin
+    # ============================================================
+
+    i = int(rng.integers(H))
+    j = int(rng.integers(L))
+
+    chosen_spin = (i, j)
+    chosen_dE = int(dE_array[i, j])
+
+    E_before = int(b.sum())
+
+    # ============================================================
+    # 3. Accept/reject
+    # ============================================================
+
+    if flags[i, j]:
+        accepted = False
+
+    elif chosen_dE <= 0:
+        accepted = True
+
+    else:
+        accepted = rng.random() < np.exp(-beta * chosen_dE)
+
+    # ============================================================
+    # 4. If rejected, return unchanged cache
+    # ============================================================
+
+    if not accepted:
+        return {
+            "lattice": lattice,
+            "b": b,
+            "dE_array": dE_array,
+            "chosen_spin": chosen_spin,
+            "chosen_dE": chosen_dE,
+            "accepted": False,
+            "E_before": E_before,
+            "E_after": E_before,
+            "beta": beta,
+        }
+
+    # ============================================================
+    # 5. Accepted: flip spin
+    # ============================================================
+
+    if debug_check:
+        energy_before = energy(lattice)
+
+    lattice[i, j] ^= 1
+
+    # ============================================================
+    # 6. Update syndrome cache locally
+    # ============================================================
+
+    toggled_stabs = [
+        (i % H, j % L),
+        ((i - 1) % H, j % L),
+        ((i - 1) % H, (j - 1) % L),
+    ]
+
+    for a, c in toggled_stabs:
+        b[a, c] ^= 1
+
+    # ============================================================
+    # 7. Update local dE cache
+    # ============================================================
+
+    affected = set()
+
+    # If stabilizer b[a,c] changed, affected spins are:
+    # (a,c), (a+1,c), (a+1,c+1)
+    for a, c in toggled_stabs:
+        affected.add((a % H, c % L))
+        affected.add(((a + 1) % H, c % L))
+        affected.add(((a + 1) % H, (c + 1) % L))
+
+    for u, v in affected:
+        touched = (
+            int(b[u % H, v % L])
+            + int(b[(u - 1) % H, v % L])
+            + int(b[(u - 1) % H, (v - 1) % L])
+        )
+
+        dE_array[u, v] = 3 - 2 * touched
+
+    E_after = int(b.sum())
+
+    # ============================================================
+    # 8. Optional debug checks
+    # ============================================================
+
+    if debug_check:
+        energy_after = energy(lattice)
+
+        if energy_after != energy_before + chosen_dE:
+            print("Energy consistency failed.")
+            print("chosen_spin:", chosen_spin)
+            print("chosen_dE:", chosen_dE)
+            print("energy_before:", energy_before)
+            print("energy_after:", energy_after)
+            print("expected:", energy_before + chosen_dE)
+            raise ValueError("Metropolis dE does not match actual energy change.")
+
+        b_full = compute_b_nm(lattice).astype(np.uint8)
+
+        if not np.array_equal(b, b_full):
+            print("Syndrome cache failed.")
+            print("chosen_spin:", chosen_spin)
+            print("cached b:")
+            print(b)
+            print("full b:")
+            print(b_full)
+            raise ValueError("Cached b does not match compute_b_nm(lattice).")
+
+        bb_full = b_full.astype(np.int16)
+
+        touched_full = (
+            bb_full
+            + np.roll(bb_full, shift=1, axis=0)
+            + np.roll(np.roll(bb_full, shift=1, axis=0), shift=1, axis=1)
+        )
+
+        dE_full = (3 - 2 * touched_full).astype(np.int8)
+
+        if not np.array_equal(dE_array, dE_full):
+            print("dE cache failed.")
+            print("chosen_spin:", chosen_spin)
+            print("difference:")
+            print(dE_array - dE_full)
+            raise ValueError("Cached dE_array does not match full recomputation.")
+
+    return {
+        "lattice": lattice,
+        "b": b,
+        "dE_array": dE_array,
+        "chosen_spin": chosen_spin,
+        "chosen_dE": chosen_dE,
+        "accepted": True,
+        "E_before": E_before,
+        "E_after": E_after,
+        "beta": beta,
+    }
+
+    
 # optimal decoder
 import numpy as np
 
